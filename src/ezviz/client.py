@@ -45,9 +45,12 @@ class EzvizClient:
         Reference filter mirrors client.py::_get_page_list's broad-filter
         single-call pattern (not a per-device fetch): ``CONNECTION`` was
         added to the filter (alongside the pre-existing ``CLOUD,TIME_PLAN,
-        STATUS``) so ``Device.wan_ip`` (``CONNECTION[serial].netIp``,
-        confirmed via camera.py::status()) can be populated from the SAME
-        request, without an extra per-camera round trip.
+        STATUS``) so ``Device.wan_ip``/``local_ip`` (``CONNECTION[serial]
+        .netIp``/``.localIp``, confirmed via camera.py::status()) can be
+        populated from the SAME request, without an extra per-camera round
+        trip. ``Device.channels`` (``deviceInfos.channelNumber``) needs no
+        filter change -- it's on the same ``deviceInfos`` item already
+        fetched via ``CLOUD``.
         """
         if self._session is None:
             raise AuthError("not logged in")

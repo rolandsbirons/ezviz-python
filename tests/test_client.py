@@ -30,6 +30,7 @@ async def test_login_then_cameras():
                             "deviceCategory": "IPC",
                             "deviceSubCategory": "C6CN",
                             "version": "5.3.0",
+                            "channelNumber": 2,
                         },
                         {
                             "deviceSerial": "BB2",
@@ -39,7 +40,7 @@ async def test_login_then_cameras():
                         },
                     ],
                     "STATUS": {"AA1": {"isEncrypt": 1}},
-                    "CONNECTION": {"AA1": {"netIp": "203.0.113.9"}},
+                    "CONNECTION": {"AA1": {"netIp": "203.0.113.9", "localIp": "192.168.1.50"}},
                 })
             )
             await ez.login("user@example.com", "pw")
@@ -52,9 +53,14 @@ async def test_login_then_cameras():
     assert cams["AA1"].device.version == "5.3.0"
     assert cams["AA1"].device.encrypted is True
     assert cams["AA1"].device.wan_ip == "203.0.113.9"
-    # BB2 has no STATUS/CONNECTION entry -- new fields default sanely.
+    assert cams["AA1"].device.local_ip == "192.168.1.50"
+    assert cams["AA1"].device.channels == 2
+    # BB2 has no STATUS/CONNECTION entry and no channelNumber -- new fields
+    # default sanely.
     assert cams["BB2"].device.encrypted is False
     assert cams["BB2"].device.wan_ip is None
+    assert cams["BB2"].device.local_ip is None
+    assert cams["BB2"].device.channels == 1
 
 
 @pytest.mark.asyncio

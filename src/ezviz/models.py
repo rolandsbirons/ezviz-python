@@ -30,17 +30,24 @@ class Region(Enum):
 class Device:
     """A discovered camera/device from the pagelist ``deviceInfos`` list.
 
-    ``sub_category``/``version`` live directly on the ``deviceInfos`` item
-    itself (confirmed: camera.py::status() -- ``self.fetch_key(["deviceInfos",
-    "deviceSubCategory"])`` / ``["deviceInfos", "version"]``, same item shape
-    as ``name``/``status``/``deviceCategory``). ``wan_ip``/``encrypted`` live
-    in SIBLING pagelist blocks keyed by device serial, not on the
-    ``deviceInfos`` item -- confirmed: camera.py::status()'s
-    ``wan_ip = conn.get("netIp") or self.fetch_key(["CONNECTION", "netIp"])``
-    and ``bool(self.fetch_key(["STATUS", "isEncrypt"]))`` -- so
-    :meth:`from_api` takes those blocks as separate optional args (see
-    ``EzvizClient.cameras()``, which now requests ``CONNECTION`` alongside
-    the existing ``STATUS`` filter to supply them).
+    ``sub_category``/``version``/``channels`` live directly on the
+    ``deviceInfos`` item itself (confirmed: camera.py::status() --
+    ``self.fetch_key(["deviceInfos", "deviceSubCategory"])`` /
+    ``["deviceInfos", "version"]`` / ``["deviceInfos", "channelNumber"]``
+    (the latter surfaced as ``status()``'s ``supported_channels``), same
+    item shape as ``name``/``status``/``deviceCategory``). ``wan_ip``/
+    ``encrypted``/``local_ip`` live in SIBLING pagelist blocks keyed by
+    device serial, not on the ``deviceInfos`` item -- confirmed:
+    camera.py::status()'s ``wan_ip = conn.get("netIp") or
+    self.fetch_key(["CONNECTION", "netIp"])``, ``bool(self.fetch_key(
+    ["STATUS", "isEncrypt"]))``, and ``local_ip``'s own fallback chain
+    (``_local_ip()``, which prefers ``WIFI.address`` then falls back to
+    ``CONNECTION.localIp`` -- ``cameras()`` doesn't fetch WIFI, so this
+    reads ``CONNECTION.localIp`` directly, the same field
+    ``DeviceEndpoint.from_connection`` already reads for the local-SDK live
+    path) -- so :meth:`from_api` takes those blocks as separate optional
+    args (see ``EzvizClient.cameras()``, which requests ``CONNECTION``
+    alongside the existing ``STATUS`` filter to supply them).
     """
 
     serial: str
@@ -51,6 +58,8 @@ class Device:
     version: str = ""
     wan_ip: str | None = None
     encrypted: bool = False
+    local_ip: str | None = None
+    channels: int = 1
 
     @classmethod
     def from_api(
@@ -63,6 +72,9 @@ class Device:
         status = status or {}
         connection = connection or {}
         net_ip = connection.get("netIp")
+        local_ip = connection.get("localIp")
+        channel_number = data.get("channelNumber")
+        channels = channel_number if isinstance(channel_number, int) and channel_number > 0 else 1
         return cls(
             serial=str(data["deviceSerial"]),
             name=str(data.get("name", "")),
@@ -72,6 +84,8 @@ class Device:
             version=str(data.get("version", "")),
             wan_ip=str(net_ip) if isinstance(net_ip, str) and net_ip else None,
             encrypted=bool(status.get("isEncrypt", False)),
+            local_ip=str(local_ip) if isinstance(local_ip, str) and local_ip else None,
+            channels=channels,
         )
 
 

@@ -24,6 +24,8 @@ def test_device_from_api_maps_fields():
     assert dev.version == ""
     assert dev.wan_ip is None
     assert dev.encrypted is False
+    assert dev.local_ip is None
+    assert dev.channels == 1
 
 
 def test_device_from_api_maps_sub_category_and_version_from_deviceinfos_item():
@@ -62,3 +64,32 @@ def test_device_from_api_maps_wan_ip_from_connection_block():
     payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
     dev = Device.from_api(payload, connection={"netIp": "203.0.113.9"})
     assert dev.wan_ip == "203.0.113.9"
+
+
+def test_device_from_api_maps_local_ip_from_connection_block():
+    # Reference: camera.py::status() -- "local_ip": self._local_ip(), whose
+    # fallback chain reads CONNECTION.localIp (self._device.get("CONNECTION")
+    # .get("localIp")) -- the same CONNECTION[serial] block wan_ip reads
+    # netIp from, and the same field DeviceEndpoint.from_connection already
+    # reads for the local-SDK live path.
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(payload, connection={"localIp": "192.168.1.50"})
+    assert dev.local_ip == "192.168.1.50"
+
+
+def test_device_from_api_maps_channels_from_deviceinfos_item():
+    # Reference: camera.py::status() -- "supported_channels":
+    # self.fetch_key(["deviceInfos", "channelNumber"]) -- on the deviceInfos
+    # item itself, like sub_category/version.
+    payload = {
+        "deviceSerial": "AA1234567", "name": "Front", "status": 1, "channelNumber": 2,
+    }
+    dev = Device.from_api(payload)
+    assert dev.channels == 2
+
+
+def test_device_from_api_defaults_channels_to_1_when_absent_or_invalid():
+    base = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    assert Device.from_api(base).channels == 1
+    assert Device.from_api({**base, "channelNumber": 0}).channels == 1
+    assert Device.from_api({**base, "channelNumber": "not-a-number"}).channels == 1
