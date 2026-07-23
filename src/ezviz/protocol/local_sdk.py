@@ -395,7 +395,9 @@ async def open_local_sdk_stream(  # noqa: PLR0913
 
     async with (
         DeviceLink(
-            host, command_port, timeout=connect_timeout, local_addr=("", receiver_port)
+            # bind the command socket's source port to the declared receiver port;
+            # host must be "0.0.0.0", not "" (empty fails getaddrinfo on Linux).
+            host, command_port, timeout=connect_timeout, local_addr=("0.0.0.0", receiver_port)
         ) as command_link,
         DeviceLink(host, stream_port, timeout=connect_timeout) as stream_link,
     ):
