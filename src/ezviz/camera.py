@@ -2,7 +2,10 @@
 SD records, live H.265 stream). SD playback/download come in later milestones."""
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import aclosing, suppress
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -200,7 +203,7 @@ class Camera:
 
     async def live(
         self, *, quality: str = "sub", channel: int = 1
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncGenerator[bytes, None]:
         """Yield encoded (H.265, typically) frame chunks from the camera's
         local-SDK live stream over the LAN.
 
@@ -238,3 +241,31 @@ class Camera:
             **kwargs,
         ):
             yield chunk
+
+    async def download(
+        self, *, seconds: float, path: str | Path, quality: str = "sub"
+    ) -> int:
+        """Record ``seconds`` of the live H.265 stream to ``path``; return the
+        number of bytes written.
+
+        Reuses the proven ``live()`` local-SDK path -- no ffmpeg/remux, raw
+        H.265 bytes are written as received (reference intent: client.py::
+        save_clip/_save_local_sdk_clip, which records copy_local_sdk_stream
+        output). This records CURRENT live video only; scrub-playback of
+        *past* SD footage is not implemented -- see the class docstring.
+        """
+        written = 0
+        fh = await asyncio.to_thread(Path(path).open, "wb")
+        try:
+            async with aclosing(self.live(quality=quality)) as stream:
+
+                async def _pump() -> None:
+                    nonlocal written
+                    async for chunk in stream:
+                        written += await asyncio.to_thread(fh.write, chunk)
+
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(_pump(), timeout=seconds)
+        finally:
+            await asyncio.to_thread(fh.close)
+        return written
