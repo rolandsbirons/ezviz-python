@@ -35,7 +35,7 @@ when a ``media_key`` is given -- see that class's docstring.
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from hashlib import md5
 
@@ -390,7 +390,7 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     stream_mode: str | int = -1,
     connect_timeout: float = 10.0,
     max_prefix_bytes: int = 4096,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes, None]:
     """Connect, bootstrap preview + stream setup, and yield clean Annex-B
     HEVC NAL byte chunks (de-framed from the camera's IDMX-wrapped media
     stream -- see ``StreamDecryptor``).

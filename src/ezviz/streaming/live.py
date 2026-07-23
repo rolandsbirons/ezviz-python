@@ -7,7 +7,7 @@ lower-level ``protocol.local_sdk`` layer treats as required (non-Optional).
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
 from ..exceptions import AuthError
@@ -26,7 +26,7 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     command_port: int = local_sdk.DEFAULT_COMMAND_PORT,
     stream_port: int = local_sdk.DEFAULT_STREAM_PORT,
     receiver_port: int = local_sdk.DEFAULT_RECEIVER_PORT,
-) -> AsyncIterator[bytes]:
+) -> AsyncGenerator[bytes, None]:
     """Validate local-SDK control-frame credentials and open the live stream.
 
     ``operation_code``/``device_key`` are the reference's ``EzvizCasDeviceInfo``
