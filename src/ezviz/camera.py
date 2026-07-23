@@ -445,6 +445,16 @@ class Camera:
         messages = data.get("message") or data.get("messages") or []
         return [m for m in messages if isinstance(m, dict)]
 
+    async def smart_detection(self, enable: bool) -> None:
+        """Enable/disable human/vehicle ("smart") detection.
+
+        Reference: client.py::set_alarm_detect_human_car -- sets devconfig
+        key ``Alarm_DetectHumanCar`` to the JSON string ``{"type": 1/0}``
+        (via ``set_device_config_by_key``, the same devconfig-keyValue path
+        used by ``night_vision``).
+        """
+        await self._set_config_key("Alarm_DetectHumanCar", f'{{"type":{1 if enable else 0}}}')
+
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
         so ``live()`` can connect without manual creds.

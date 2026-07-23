@@ -10,6 +10,7 @@ specific reference function read to confirm the contract.
 from __future__ import annotations
 
 import json
+import urllib.parse
 
 import httpx
 import pytest
@@ -314,3 +315,34 @@ async def test_messages_falls_back_to_messages_key():
             )
             msgs = await _cam(http).messages()
     assert msgs == [{"deviceSerial": "AA1"}]
+
+
+# --- Task 10: smart_detection(enable) -- reference:
+# client.py::set_alarm_detect_human_car (-> set_device_config_by_key) --------
+
+
+@pytest.mark.asyncio
+async def test_smart_detection_on_sets_devconfig_keyvalue():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/devconfig/v1/keyValue/AA1/1/op"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).smart_detection(True)
+        sent = urllib.parse.unquote_plus(route.calls.last.request.content.decode())
+    assert "key=Alarm_DetectHumanCar" in sent
+    assert '"type":1' in sent
+
+
+@pytest.mark.asyncio
+async def test_smart_detection_off_sends_type_0():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/devconfig/v1/keyValue/AA1/1/op"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).smart_detection(False)
+        sent = urllib.parse.unquote_plus(route.calls.last.request.content.decode())
+    assert '"type":0' in sent
