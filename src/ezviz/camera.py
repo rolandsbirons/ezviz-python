@@ -38,6 +38,9 @@ DEVCONFIG_KEY_VALUE_PATH_TEMPLATE = "/v3/devconfig/v1/keyValue/{serial}/{channel
 # Reference: client.py::detection_sensibility / API_ENDPOINT_DETECTION_SENSIBILITY.
 # NOT device-serial-prefixed; a top-level "resultCode" envelope, not "meta".
 DETECTION_SENSIBILITY_PATH = "/api/device/configAlgorithm"
+# Reference: client.py::do_not_disturb -- API_ENDPOINT_V3_ALARMS + API_ENDPOINT_DO_NOT_DISTURB.
+# Note the /v3/alarms/ prefix (not /v3/devices/) with a literal channel segment.
+DO_NOT_DISTURB_PATH_TEMPLATE = "/v3/alarms/{serial}/{channel}/nodisturb"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -377,6 +380,20 @@ class Camera:
         )
         if str(payload.get("resultCode")) != "0":
             raise EzvizError(f"could not set detection sensibility: {payload}")
+
+    async def do_not_disturb(self, enable: bool, *, channel: int = 1) -> None:
+        """Enable/disable do-not-disturb (suppress alarm notifications).
+
+        Reference: client.py::do_not_disturb -- ``PUT
+        /v3/alarms/{serial}/{channel}/nodisturb`` with form data
+        ``{"enable": 1/0}``. Note the ``/v3/alarms/`` prefix (not
+        ``/v3/devices/``) with a literal channel path segment.
+        """
+        assert self._http is not None
+        await self._http.put_form(
+            DO_NOT_DISTURB_PATH_TEMPLATE.format(serial=self.serial, channel=channel),
+            {"enable": "1" if enable else "0"},
+        )
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,

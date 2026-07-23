@@ -215,3 +215,32 @@ async def test_set_sensitivity_raises_on_nonzero_result_code():
             )
             with pytest.raises(EzvizError):
                 await _cam(http).set_sensitivity(5)
+
+
+# --- Task 7: do_not_disturb(enable) -- reference: client.py::do_not_disturb -
+
+
+@pytest.mark.asyncio
+async def test_do_not_disturb_puts_nodisturb_endpoint():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/alarms/AA1/1/nodisturb"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).do_not_disturb(True)
+        sent = route.calls.last.request.content
+    assert b"enable=1" in sent
+
+
+@pytest.mark.asyncio
+async def test_do_not_disturb_off_sends_enable_0():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/alarms/AA1/1/nodisturb"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).do_not_disturb(False)
+        sent = route.calls.last.request.content
+    assert b"enable=0" in sent
