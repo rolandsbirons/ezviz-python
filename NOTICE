@@ -1,0 +1,7 @@
+ezviz-python
+Copyright 2026 Rolands Birons
+
+An independent, clean-room interoperability library for EZVIZ cameras. Not
+affiliated with or endorsed by EZVIZ/Hikvision. Protocol knowledge derived from
+observation and static analysis for interoperability; no vendor code or binaries
+are included. Prior art referenced: pyEzvizApi (RenierM26).
