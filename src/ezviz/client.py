@@ -113,6 +113,37 @@ class EzvizClient:
             raise EzvizError(f"device {serial} has no CONNECTION data")
         return DeviceEndpoint.from_connection(connection)
 
+    async def switch_states(self, serial: str) -> dict[int, bool]:
+        """Look up a device's switch on/off states.
+
+        Reference: client.py::get_switch -- confirmed to reuse the SAME
+        pagelist endpoint as ``cameras()``/``device_endpoint()``
+        (``_api_get_pagelist``), just with ``filter=SWITCH``. The response's
+        top-level ``SWITCH`` key is itself keyed by device serial -> a list
+        of ``{"type": int, "enable": bool|int}`` items (confirmed via the
+        reference camera.py's own SWITCH-parsing constructor logic).
+        """
+        if self._session is None:
+            raise AuthError("not logged in")
+        payload = await self._http.get_json(
+            DEVICES_PATH,
+            params={
+                "filter": "SWITCH",
+                "groupId": _PAGELIST_GROUP_ID,
+                "limit": _PAGELIST_LIMIT,
+                "offset": _PAGELIST_OFFSET,
+            },
+        )
+        items = (payload.get("SWITCH") or {}).get(serial) or []
+        out: dict[int, bool] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kind, enabled = item.get("type"), item.get("enable")
+            if isinstance(kind, int) and isinstance(enabled, bool | int):
+                out[kind] = bool(enabled)
+        return out
+
     async def set_defence_mode(self, mode: DefenceMode) -> None:
         """Set the account-level (all devices) defence/arm mode.
 

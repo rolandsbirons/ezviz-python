@@ -310,6 +310,20 @@ class Camera:
             return image_data
         return self._decrypt_if_encrypted(image_data)
 
+    async def switch_states(self) -> dict[int, bool]:
+        """Read this camera's current switch on/off states.
+
+        Reference: client.py::get_switch. Requires a ``client`` back-
+        reference (as ``EzvizClient.cameras()`` provides) -- see
+        ``EzvizClient.switch_states()``.
+        """
+        if self._client is None:
+            raise EzvizError(
+                f"camera {self.serial} has no client reference to fetch switch states; "
+                "construct it via EzvizClient.cameras()"
+            )
+        return await self._client.switch_states(self.serial)
+
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
         so ``live()`` can connect without manual creds.

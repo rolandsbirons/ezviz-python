@@ -17,6 +17,8 @@ import respx
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
+from ezviz import EzvizClient
+from ezviz.auth import Session
 from ezviz.camera import Camera
 from ezviz.crypto.media import HIK_ENCRYPTION_HEADER, derive_key, password_hash
 from ezviz.exceptions import EzvizError
@@ -130,3 +132,36 @@ async def test_ptz_to_rejects_out_of_range_coordinates():
             await _cam(http).ptz_to(1.5, 0.5)
         with pytest.raises(EzvizError):
             await _cam(http).ptz_to(0.5, -0.1)
+
+
+# --- Task 4: switch_states() -- reference: client.py::get_switch (+ the
+# same pagelist endpoint as device_endpoint(), filter=SWITCH) ---------------
+
+
+@pytest.mark.asyncio
+async def test_switch_states_reads_switch_pagelist_filter():
+    async with EzvizClient(region="eu") as ez:
+        ez._http.set_session("S")
+        ez._session = Session(session_id="S", refresh_id="R", domain="apiieu.ezvizlife.com")
+        with respx.mock:
+            route = respx.get(
+                "https://apiieu.ezvizlife.com/v3/userdevices/v1/resources/pagelist"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "meta": {"code": 200},
+                        "SWITCH": {
+                            "AA1": [
+                                {"type": 1, "enable": True},
+                                {"type": 3, "enable": 0},
+                            ]
+                        },
+                    },
+                )
+            )
+            cam = Camera(Device("AA1", "Front", True, "IPC"), http=ez._http, client=ez)
+            states = await cam.switch_states()
+        sent = route.calls.last.request.url.params
+    assert sent["filter"] == "SWITCH"
+    assert states == {1: True, 3: False}
