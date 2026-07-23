@@ -73,55 +73,39 @@ def test_decrypt_image_rejects_wrong_password():
         decrypt_image(seg, "wrong-code")
 
 
-# --- StreamDecryptor (live-video NAL decrypt + MPEG-PS de-framing) ---------
+# --- StreamDecryptor (live-video NAL decrypt + IDMX de-framing) ------------
 #
-# NOTE on the M2 draft's simplification, now replaced: M2's StreamDecryptor
-# scanned an undifferentiated byte buffer directly for Annex-B start codes,
-# assuming the local-SDK stream WAS raw Annex-B. Real-camera validation (an
-# encrypted camera, 400 captured packets) showed this was wrong: ffprobe saw
-# codec_name=hevc but "missing picture in access unit", width=0/height=0, and
-# the output didn't start with a NAL start code. The local-SDK stream is
-# MPEG-PS (pack header + PES packets) -- the PES *payload* bytes are the
-# actual Annex-B NAL stream; everything else (pack/PES headers) must be
-# stripped, not passed through. StreamDecryptor now always de-frames
-# (protocol/mpeg_ps.py) and only conditionally decrypts (when a media_key is
-# given), matching the reference's decrypt_hikvision_ps_video (decrypt) +
-# the reference CLI's own incremental-buffering pattern
-# (__main__.py::_BufferedStreamPayloadDecryptor) for the streaming/chunking
-# behavior. See crypto/media.py's module + class docstrings for exactly
-# which reference functions/algorithm this ports.
-#
-# Fixtures below build minimal-but-structurally-real MPEG-PS bytes (our own
-# test data, not copied from the reference): a 14-byte MPEG-2 pack header,
-# and PES packets shaped to satisfy protocol/mpeg_ps.py's parsing exactly
-# (verified by these tests actually passing, not just asserted).
+# NOTE on TWO corrections, now replaced: M2's StreamDecryptor scanned an
+# undifferentiated byte buffer for Annex-B start codes, assuming the local-SDK
+# stream was raw Annex-B. A first fix assumed it was MPEG-PS instead. A real
+# 206 KB / 450-packet capture proved BOTH wrong: zero MPEG-PS markers (pack
+# header 00 00 01 ba, video PES 00 00 01 e0) were found. The real framing is
+# EZVIZ's private "IDMX" format -- see protocol/idmx.py's module docstring
+# for exactly what was verified against the capture and which reference
+# functions this ports. Fixtures below are built to match the REAL sample's
+# confirmed byte layout (13-byte frame header: lead byte, unused byte,
+# marker+payload-type byte, 16-bit sequence, 32-bit timestamp, then the
+# 4-byte sentinel 55 66 77 88) -- verified against the captured sample's
+# actual bytes before being trusted (see the session's analysis), not just
+# asserted; the FU reassembly test below reproduces the exact
+# reconstructed-header/pseudo-header byte values (0x26, 0x26|0x40=0x66)
+# independently re-derived from -- and matching -- the real capture's own
+# frames 5/6/15.
 
 _ANNEX_B_START = b"\x00\x00\x00\x01"
-_HEVC_NAL_HEADER = b"\x26\x01"  # plausible IDR_W_RADL-ish HEVC NAL header
+_FRAME_SENTINEL = b"\x55\x66\x77\x88"
+_DIRECT_NAL_PAYLOAD_TYPE = 96
 
 
-def _pack_header() -> bytes:
-    return b"\x00\x00\x01\xba" + bytes(
-        [0x44, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0xF8]
+def _idmx_frame(*, marker: bool, sequence: int, timestamp: int, body: bytes) -> bytes:
+    marker_ptype = (0x80 if marker else 0) | (_DIRECT_NAL_PAYLOAD_TYPE & 0x7F)
+    header = (
+        bytes([0x0D, 0x00, marker_ptype])
+        + sequence.to_bytes(2, "big")
+        + timestamp.to_bytes(4, "big")
+        + _FRAME_SENTINEL
     )
-
-
-def _pes_video_packet(payload: bytes) -> bytes:
-    packet_length = 3 + len(payload)
-    return b"\x00\x00\x01\xe0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
-
-
-def _pes_audio_packet(payload: bytes = b"\x00") -> bytes:
-    """A non-video, non-metadata PES packet -- the reference treats this as
-    proof a preceding run of video PES packets is complete (see
-    mpeg_ps.decryptable_prefix_length)."""
-    packet_length = 3 + len(payload)
-    return b"\x00\x00\x01\xc0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
-
-
-def _mpeg_ps_video_unit(nal_bytes: bytes) -> bytes:
-    """One pack header + one video PES packet wrapping ``nal_bytes``."""
-    return _pack_header() + _pes_video_packet(nal_bytes)
+    return header + body
 
 
 def _encrypt_nal_body(body: bytes, key: bytes) -> bytes:
@@ -136,74 +120,144 @@ def _encrypt_nal_body(body: bytes, key: bytes) -> bytes:
     return cipher.encrypt(body[:aligned_len]) + body[aligned_len:]
 
 
-def test_stream_decryptor_round_trips_one_encrypted_nal_in_mpeg_ps():
+def test_stream_decryptor_round_trips_a_direct_encrypted_nal():
     media_key = "ABCDEF01"
+    key = derive_key(media_key)
+    # A VPS NAL (type 32; (32<<1)=0x40) -- unencrypted "evidence" frame that
+    # also proves the stream is HEVC, per the real capture's frames 2-4.
+    vps_frame = _idmx_frame(
+        marker=False, sequence=1, timestamp=1000, body=b"\x40\x01" + b"VPSDATA"
+    )
     plain_body = b"P" * 48  # 3 whole AES blocks, well within the 4096 prefix
-    encrypted_body = _encrypt_nal_body(plain_body, derive_key(media_key))
-    nal = _ANNEX_B_START + _HEVC_NAL_HEADER + encrypted_body
-    # A trailing non-video packet proves the video run is complete, so it's
-    # released instead of held back for a possible continuation.
-    unit = _mpeg_ps_video_unit(nal) + _pes_audio_packet()
+    encrypted_body = _encrypt_nal_body(plain_body, key)
+    # A "direct" (non-fragmented) HEVC slice NAL, type 19 (IDR_W_RADL):
+    # (19 << 1) = 0x26.
+    slice_frame = _idmx_frame(
+        marker=True, sequence=2, timestamp=1000, body=b"\x26\x01" + encrypted_body
+    )
 
-    out = StreamDecryptor(media_key).update(unit)
-
-    assert out == _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
-
-
-def test_stream_decryptor_handles_a_nal_split_across_update_calls():
-    """The coordinator's explicit ask: a NAL's bytes split across a chunk
-    boundary (e.g. one local-SDK packet ending mid-NAL) must still decrypt
-    correctly once the rest arrives."""
-    media_key = "ABCDEF01"
-    plain_body = b"Q" * 48
-    encrypted_body = _encrypt_nal_body(plain_body, derive_key(media_key))
-    nal = _ANNEX_B_START + _HEVC_NAL_HEADER + encrypted_body
-    unit = _mpeg_ps_video_unit(nal) + _pes_audio_packet()
-
-    split_at = len(unit) // 2  # lands inside the encrypted NAL body
     dec = StreamDecryptor(media_key)
-    first = dec.update(unit[:split_at])
-    second = dec.update(unit[split_at:])
+    out1 = dec.update(vps_frame)
+    out2 = dec.update(slice_frame)
 
-    assert first == b""
-    assert second == _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
+    assert out1 == _ANNEX_B_START + b"\x40\x01" + b"VPSDATA"  # parameter set: not decrypted
+    assert out2 == _ANNEX_B_START + b"\x26\x01" + plain_body
 
 
-def test_stream_decryptor_holds_back_an_incomplete_trailing_video_run():
-    """Without a terminating non-video packet, a video PES run might still be
-    continuing -- must stay buffered (not emitted) until flush() or more data
-    proves otherwise."""
+def test_stream_decryptor_skips_parameter_sidecar_frames():
+    # body[:2] == 00 01 / 00 02 -- observed in the real capture's frames 0-1;
+    # the reference's own comment says these short sidecar records aren't
+    # fed to the decoder (parameter sets come from the media-wrapper/direct
+    # frames instead).
+    frame = _idmx_frame(marker=True, sequence=1, timestamp=1000, body=b"\x00\x01\x00\x0c\x40\x0e")
+    assert StreamDecryptor("ABCDEF01").update(frame) == b""
+
+
+def test_stream_decryptor_reassembles_hevc_fu_fragments_across_update_calls():
+    """The coordinator's explicit ask: a NAL split across a chunk boundary.
+    Mirrors the real capture's frames 5/6/15 exactly: an HEVC RTP
+    Fragmentation-Unit (NAL type 49) start/continuation/end sequence, with
+    EZVIZ's continuation quirk -- continuations repeat the *reconstructed*
+    NAL header's first byte (0x26 here) instead of a standard incrementing
+    FU header, and the final fragment ORs in 0x40 (0x66) -- independently
+    re-derived here and confirmed to match the real sample's own bytes.
+    """
     media_key = "ABCDEF01"
+    key = derive_key(media_key)
+    plain_body = b"Q" * 48  # 3 whole AES blocks
+    encrypted_body = _encrypt_nal_body(plain_body, key)
+    third = len(encrypted_body) // 3
+    part1, part2, part3 = (
+        encrypted_body[:third],
+        encrypted_body[third : 2 * third],
+        encrypted_body[2 * third :],
+    )
+
+    original_type = 19  # IDR_W_RADL
+    active_header0 = 0x26  # (0x62 & 0x81) | (19 << 1), confirmed against the real capture
+
+    start_frame = _idmx_frame(
+        marker=False,
+        sequence=10,
+        timestamp=5000,
+        body=bytes([0x62, 0x01, 0x80 | original_type]) + part1,
+    )
+    cont_frame = _idmx_frame(
+        marker=False,
+        sequence=11,
+        timestamp=5000,
+        body=bytes([0x62, 0x01, active_header0]) + part2,
+    )
+    end_frame = _idmx_frame(
+        marker=True,
+        sequence=12,
+        timestamp=5000,
+        body=bytes([0x62, 0x01, active_header0 | 0x40]) + part3,
+    )
+
+    dec = StreamDecryptor(media_key)
+    out1 = dec.update(start_frame)
+    out2 = dec.update(cont_frame)
+    out3 = dec.update(end_frame)
+
+    assert out1 == b""
+    assert out2 == b""
+    assert out3 == _ANNEX_B_START + bytes([0x26, 0x01]) + plain_body
+
+
+def test_stream_decryptor_flush_emits_an_incomplete_fu_reassembly():
+    media_key = "ABCDEF01"
+    key = derive_key(media_key)
     plain_body = b"R" * 32
-    encrypted_body = _encrypt_nal_body(plain_body, derive_key(media_key))
-    nal = _ANNEX_B_START + _HEVC_NAL_HEADER + encrypted_body
-    unit = _mpeg_ps_video_unit(nal)  # no terminator
+    encrypted_body = _encrypt_nal_body(plain_body, key)
+    original_type = 19
+
+    start_frame = _idmx_frame(
+        marker=False,
+        sequence=1,
+        timestamp=2000,
+        body=bytes([0x62, 0x01, 0x80 | original_type]) + encrypted_body,
+    )
 
     dec = StreamDecryptor(media_key)
-    assert dec.update(unit) == b""
-    assert dec.flush() == _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
+    assert dec.update(start_frame) == b""  # no end marker seen yet
+    assert dec.flush() == _ANNEX_B_START + bytes([0x26, 0x01]) + plain_body
+
+
+def _vps_evidence_frame(sequence: int, timestamp: int) -> bytes:
+    """A VPS NAL (type 32) -- the minimal frame that flags this stream as
+    HEVC, per the real capture's frames 2-4, and is required (per the
+    reference's own dispatch logic) before a lone non-fragmented "direct"
+    slice NAL will be recognized -- a cold-start slice NAL with no prior
+    parameter-set/FU evidence is legitimately not dispatched at all."""
+    return _idmx_frame(marker=False, sequence=sequence, timestamp=timestamp, body=b"\x40\x01VPS")
 
 
 def test_stream_decryptor_without_media_key_still_de_frames_to_annex_b():
-    """Unencrypted cameras still need MPEG-PS -> Annex-B extraction."""
+    """Unencrypted cameras still need IDMX -> Annex-B extraction."""
     plain_body = b"S" * 20
-    nal = _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
-    unit = _mpeg_ps_video_unit(nal) + _pes_audio_packet()
+    frame = _idmx_frame(marker=True, sequence=2, timestamp=1000, body=b"\x26\x01" + plain_body)
 
-    out = StreamDecryptor(None).update(unit)
+    dec = StreamDecryptor(None)
+    dec.update(_vps_evidence_frame(1, 1000))
+    out = dec.update(frame)
 
-    assert out == _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
+    assert out == _ANNEX_B_START + b"\x26\x01" + plain_body
 
 
 def test_stream_decryptor_leaves_bytes_beyond_prefix_window_untouched():
     media_key = "ABCDEF01"
+    key = derive_key(media_key)
     # Body longer than the 4096-byte encrypted prefix: only the prefix was
     # ever encrypted, so the tail must already be (and must stay) plaintext.
     plain_body = b"T" * (HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH + 32)
-    encrypted_body = _encrypt_nal_body(plain_body, derive_key(media_key))
-    nal = _ANNEX_B_START + _HEVC_NAL_HEADER + encrypted_body
-    unit = _mpeg_ps_video_unit(nal) + _pes_audio_packet()
+    encrypted_body = _encrypt_nal_body(plain_body, key)
+    frame = _idmx_frame(
+        marker=True, sequence=2, timestamp=1000, body=b"\x26\x01" + encrypted_body
+    )
 
-    out = StreamDecryptor(media_key).update(unit)
+    dec = StreamDecryptor(media_key)
+    dec.update(_vps_evidence_frame(1, 1000))
+    out = dec.update(frame)
 
-    assert out == _ANNEX_B_START + _HEVC_NAL_HEADER + plain_body
+    assert out == _ANNEX_B_START + b"\x26\x01" + plain_body

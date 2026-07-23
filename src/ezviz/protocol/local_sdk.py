@@ -27,9 +27,10 @@ dependency.
 
 Media framing/decryption: every media chunk (whether the camera encrypts or
 not) is routed through ``crypto.media.StreamDecryptor``, which de-frames the
-MPEG-PS-wrapped local-SDK stream into clean Annex-B NAL bytes (and decrypts
-AES-ECB-encrypted NAL prefixes when a ``media_key`` is given) -- see that
-class's docstring.
+local-SDK stream's private "IDMX" framing (confirmed against a real capture
+-- see ``protocol/idmx.py``'s module docstring; it is NOT standard MPEG-PS)
+into clean Annex-B NAL bytes, and decrypts AES-ECB-encrypted NAL prefixes
+when a ``media_key`` is given -- see that class's docstring.
 """
 from __future__ import annotations
 
@@ -336,10 +337,12 @@ def rtp_payload(data: bytes) -> bytes:
 
 
 def strip_local_fragment_header(payload: bytes) -> bytes:
-    """Remove the 2-byte local-stream fragment marker before MPEG-PS bytes.
+    """Remove the 2-byte local-stream fragment marker before the media bytes.
 
-    Observed local-SDK values are ``1c80`` for a PS packet's first fragment
-    and ``1c00`` for continuations.
+    Observed local-SDK values are ``1c80`` for a packet's first fragment and
+    ``1c00`` for continuations (the reference's own comment calls what
+    follows "MPEG-PS bytes"; a real capture showed the actual content is
+    EZVIZ's private "IDMX" framing instead -- see ``protocol/idmx.py``).
     """
     if len(payload) >= 2 and payload[0] == LOCAL_FRAGMENT_MARKER:
         return payload[2:]
@@ -389,8 +392,8 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     max_prefix_bytes: int = 4096,
 ) -> AsyncIterator[bytes]:
     """Connect, bootstrap preview + stream setup, and yield clean Annex-B
-    H.265/H.264 NAL byte chunks (de-framed from the camera's MPEG-PS-wrapped
-    media stream -- see ``StreamDecryptor``).
+    HEVC NAL byte chunks (de-framed from the camera's IDMX-wrapped media
+    stream -- see ``StreamDecryptor``).
 
     Mirrors ``EzvizLocalSdkClient.bootstrap_preview_from_fields`` +
     ``EzvizLocalSdkMediaStream.iter_packets``: preview (``0x2011``) goes over
@@ -399,7 +402,7 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     (16/17) and the 10101 receiver port match the reference's top-level
     ``open_local_sdk_stream_from_client`` entry point defaults.
     """
-    # Always de-frames MPEG-PS -> Annex-B (see StreamDecryptor's docstring);
+    # Always de-frames IDMX -> Annex-B (see StreamDecryptor's docstring);
     # decryption only runs when media_key is given, but every camera's
     # stream needs the de-framing step regardless of encryption.
     assembler = StreamDecryptor(media_key)

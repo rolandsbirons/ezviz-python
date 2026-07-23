@@ -205,31 +205,25 @@ def _rtp_packet(inner: bytes) -> bytes:
     return bytes([0x80, 0x60, 0x00, 0x01]) + b"\x00" * 8 + inner
 
 
-# Minimal-but-structurally-real MPEG-PS bytes (this project's own test data,
-# not copied from the reference) -- see test_media.py's fixture comment for
-# why the local-SDK stream must be treated as MPEG-PS, not raw Annex-B.
+# Minimal-but-structurally-real IDMX frame bytes (this project's own test
+# data, not copied from the reference) -- see test_media.py's fixture
+# comment for why the local-SDK stream must be treated as EZVIZ's private
+# IDMX framing (confirmed against a real capture), not MPEG-PS or raw
+# Annex-B.
 _ANNEX_B_START = b"\x00\x00\x00\x01"
-_HEVC_NAL_HEADER = b"\x26\x01"
+_FRAME_SENTINEL = b"\x55\x66\x77\x88"
+_DIRECT_NAL_PAYLOAD_TYPE = 96
 
 
-def _pack_header() -> bytes:
-    return b"\x00\x00\x01\xba" + bytes(
-        [0x44, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0xF8]
+def _idmx_frame(*, marker: bool, sequence: int, timestamp: int, body: bytes) -> bytes:
+    marker_ptype = (0x80 if marker else 0) | (_DIRECT_NAL_PAYLOAD_TYPE & 0x7F)
+    header = (
+        bytes([0x0D, 0x00, marker_ptype])
+        + sequence.to_bytes(2, "big")
+        + timestamp.to_bytes(4, "big")
+        + _FRAME_SENTINEL
     )
-
-
-def _pes_video_packet(payload: bytes) -> bytes:
-    packet_length = 3 + len(payload)
-    return b"\x00\x00\x01\xe0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
-
-
-def _pes_audio_packet(payload: bytes = b"\x00") -> bytes:
-    packet_length = 3 + len(payload)
-    return b"\x00\x00\x01\xc0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
-
-
-def _mpeg_ps_video_unit(nal_bytes: bytes) -> bytes:
-    return _pack_header() + _pes_video_packet(nal_bytes)
+    return header + body
 
 
 @pytest.mark.asyncio
@@ -272,18 +266,19 @@ async def test_open_local_sdk_stream_negotiates_and_yields_media():
         writer.write(_plain_response_frame(command=STREAM_SETUP_RESPONSE, body=response_body))
         # Arbitrary binary preface before the first "$" frame, per the reference.
         writer.write(b"\xab\xcd\xef")
-        # Two MPEG-PS "units" (pack header + video PES), each carrying one
-        # NAL, split across two local-SDK/RTP packets -- exercising the
-        # assembler's cross-packet buffering. Nothing is releasable until the
-        # trailing audio PES packet proves the video run is complete (see
-        # mpeg_ps.decryptable_prefix_length), so both NALs come out together
-        # in a single yielded chunk once that arrives.
-        nal1 = _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMEONEDATA"
-        nal2 = _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMETWODATA"
-        unit1 = _mpeg_ps_video_unit(nal1)
-        unit2 = _mpeg_ps_video_unit(nal2) + _pes_audio_packet()
-        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + unit1)))
-        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + unit2)))
+        # Two IDMX frames on two local-SDK/RTP packets: a VPS "evidence"
+        # frame (type 32; unambiguous proof this is HEVC, matching the real
+        # capture's own frames 2-4) followed by a direct (non-fragmented)
+        # slice NAL (type 19). Each frame is self-contained per packet, so
+        # each RTP frame yields its own Annex-B chunk immediately (unlike a
+        # cross-packet-buffered scheme) -- see test_media.py for the FU
+        # (fragmented-NAL, multi-packet) case.
+        vps_frame = _idmx_frame(marker=False, sequence=1, timestamp=1000, body=b"\x40\x01VPSDATA")
+        slice_frame = _idmx_frame(
+            marker=True, sequence=2, timestamp=1000, body=b"\x26\x01FRAMEONEDATA"
+        )
+        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + vps_frame)))
+        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + slice_frame)))
         await writer.drain()
         # Keep the connection open until the test closes it (real cameras
         # stream continuously); avoid closing early to prevent a race with
@@ -306,12 +301,10 @@ async def test_open_local_sdk_stream_negotiates_and_yields_media():
             connect_timeout=5.0,
         )
         first = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
+        second = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
         await gen.aclose()
-        assert first.startswith(_ANNEX_B_START)
-        assert first == (
-            _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMEONEDATA"
-            + _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMETWODATA"
-        )
+        assert first == _ANNEX_B_START + b"\x40\x01VPSDATA"
+        assert second == _ANNEX_B_START + b"\x26\x01FRAMEONEDATA"
     finally:
         command_server.close()
         stream_server.close()
