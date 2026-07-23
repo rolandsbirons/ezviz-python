@@ -1,5 +1,13 @@
 """Camera object — status view + device controls (PTZ, switches, siren, alarms,
-SD records, live H.265 stream). SD playback/download come in later milestones."""
+SD records, live H.265 stream, live-to-file download).
+
+Scrub-playback of *past* SD footage is not implemented (open RE item -- the
+reference has HCNetSDK playback *names* but no working local command-port
+playback plan; native-RE ``CreatePlaybackStartReq`` is not reproducible
+without deep further RE). ``records()`` lists SD-card recording segments;
+``download()`` records the *current live* stream to a file -- it does not
+seek/scrub into past recordings.
+"""
 from __future__ import annotations
 
 import asyncio
