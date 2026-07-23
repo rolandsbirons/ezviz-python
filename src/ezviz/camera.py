@@ -41,6 +41,9 @@ DETECTION_SENSIBILITY_PATH = "/api/device/configAlgorithm"
 # Reference: client.py::do_not_disturb -- API_ENDPOINT_V3_ALARMS + API_ENDPOINT_DO_NOT_DISTURB.
 # Note the /v3/alarms/ prefix (not /v3/devices/) with a literal channel segment.
 DO_NOT_DISTURB_PATH_TEMPLATE = "/v3/alarms/{serial}/{channel}/nodisturb"
+# Reference: client.py::reboot_camera / API_ENDPOINT_DEVICE_SYS_OPERATION.
+# Another "resultCode" (not "meta") envelope.
+REBOOT_PATH_TEMPLATE = "/api/device/v2/sysOper/{serial}"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -394,6 +397,24 @@ class Camera:
             DO_NOT_DISTURB_PATH_TEMPLATE.format(serial=self.serial, channel=channel),
             {"enable": "1" if enable else "0"},
         )
+
+    async def reboot(self, *, delay: int = 1, operation: int = 1) -> None:
+        """Reboot the camera.
+
+        Reference: client.py::reboot_camera -- ``POST
+        /api/device/v2/sysOper/{serial}`` with form data ``{"oper":
+        operation, "deviceSerial": serial, "delay": delay}``. Response uses
+        a top-level ``resultCode`` envelope (``"0"`` for success), same as
+        ``set_sensitivity`` -- so this uses ``post_raw`` and checks
+        ``resultCode`` itself.
+        """
+        assert self._http is not None
+        payload = await self._http.post_raw(
+            REBOOT_PATH_TEMPLATE.format(serial=self.serial),
+            {"oper": str(operation), "deviceSerial": self.serial, "delay": str(delay)},
+        )
+        if str(payload.get("resultCode")) != "0":
+            raise EzvizError(f"could not reboot device: {payload}")
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,

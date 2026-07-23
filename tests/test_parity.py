@@ -244,3 +244,34 @@ async def test_do_not_disturb_off_sends_enable_0():
             await _cam(http).do_not_disturb(False)
         sent = route.calls.last.request.content
     assert b"enable=0" in sent
+
+
+# --- Task 8: reboot() -- reference: client.py::reboot_camera -- another
+# "resultCode" (not "meta") envelope, POST /api/device/v2/sysOper/{serial} --
+
+
+@pytest.mark.asyncio
+async def test_reboot_posts_sys_oper():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.post(
+                "https://apiieu.ezvizlife.com/api/device/v2/sysOper/AA1"
+            ).mock(return_value=httpx.Response(200, json={"resultCode": "0"}))
+            await _cam(http).reboot()
+        sent = route.calls.last.request.content
+    assert b"oper=1" in sent
+    assert b"deviceSerial=AA1" in sent
+    assert b"delay=1" in sent
+
+
+@pytest.mark.asyncio
+async def test_reboot_raises_on_nonzero_result_code():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.post("https://apiieu.ezvizlife.com/api/device/v2/sysOper/AA1").mock(
+                return_value=httpx.Response(200, json={"resultCode": "-1"})
+            )
+            with pytest.raises(EzvizError):
+                await _cam(http).reboot()
