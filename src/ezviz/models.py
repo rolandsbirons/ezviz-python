@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .exceptions import EzvizError
+
 
 class Region(Enum):
     EU = "apiieu.ezvizlife.com"
@@ -140,4 +142,39 @@ class Record:
                 data.get("videoType"),
                 data.get("recType"),
             ),
+        )
+
+
+# Reference default when localCmdPort is absent from CONNECTION metadata
+# (hcnetsdk.py::HCNETSDK_DEFAULT_SERVER_PORT).
+_DEFAULT_CMD_PORT = 8000
+
+
+@dataclass(slots=True, frozen=True)
+class DeviceEndpoint:
+    """A device's LAN reachability info, for the local-SDK live path.
+
+    Reference: hcnetsdk.py::HcNetSdkLanEndpoint.from_connection -- built from
+    a pagelist ``CONNECTION`` block (fetched via ``EzvizClient.device_
+    endpoint``, the SAME ``/v3/userdevices/v1/resources/pagelist`` endpoint
+    as device discovery, just with ``filter=CONNECTION``)."""
+
+    local_ip: str
+    net_ip: str | None = None
+    cmd_port: int = _DEFAULT_CMD_PORT
+    stream_port: int | None = None
+
+    @classmethod
+    def from_connection(cls, connection: dict[str, Any]) -> DeviceEndpoint:
+        local_ip = connection.get("localIp")
+        if not isinstance(local_ip, str) or not local_ip.strip():
+            raise EzvizError("CONNECTION metadata is missing localIp")
+        net_ip = connection.get("netIp")
+        cmd_port = connection.get("localCmdPort") or _DEFAULT_CMD_PORT
+        stream_port = connection.get("localStreamPort")
+        return cls(
+            local_ip=local_ip.strip(),
+            net_ip=str(net_ip) if net_ip else None,
+            cmd_port=int(cmd_port),
+            stream_port=int(stream_port) if stream_port else None,
         )

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from .auth import Session, login
 from .camera import Camera
-from .exceptions import AuthError
-from .models import DefenceMode, Device, Region
+from .exceptions import AuthError, EzvizError
+from .models import DefenceMode, Device, DeviceEndpoint, Region
 from .transport.http import EzvizHttp
 
 DEVICES_PATH = "/v3/userdevices/v1/resources/pagelist"
@@ -12,6 +12,13 @@ DEFENCE_MODE_PATH = "/v3/userdevices/v1/group/defenceMode"
 SWITCH_DEFENCE_MODE_PATH = "/v3/userdevices/v1/group/switchDefenceMode"
 # -1 means "all devices" -- the account-level defence panel on the app's home page.
 _ALL_DEVICES_GROUP_ID = "-1"
+# Confirmed by reading client.py::get_device_infos -> _get_page_list ->
+# _api_get_pagelist: it's the SAME pagelist endpoint as device discovery
+# (DEVICES_PATH above), just with a broader `filter` (includes "CONNECTION")
+# and explicit groupId/limit/offset -- NOT a different endpoint path.
+_PAGELIST_GROUP_ID = "-1"
+_PAGELIST_LIMIT = "30"
+_PAGELIST_OFFSET = "0"
 
 
 class EzvizClient:
@@ -33,6 +40,31 @@ class EzvizClient:
             dev = Device.from_api(info)
             out[dev.serial] = Camera(dev, http=self._http)
         return out
+
+    async def device_endpoint(self, serial: str) -> DeviceEndpoint:
+        """Look up a device's LAN reachability info (for the local-SDK live path).
+
+        Reference: client.py::get_device_infos -- confirmed (not guessed) to
+        reuse the SAME pagelist endpoint as ``cameras()`` above, requested
+        with ``filter=CONNECTION`` (plus the pagelist's usual groupId/limit/
+        offset). Response top-level key ``CONNECTION`` is itself keyed by
+        device serial.
+        """
+        if self._session is None:
+            raise AuthError("not logged in")
+        payload = await self._http.get_json(
+            DEVICES_PATH,
+            params={
+                "filter": "CONNECTION",
+                "groupId": _PAGELIST_GROUP_ID,
+                "limit": _PAGELIST_LIMIT,
+                "offset": _PAGELIST_OFFSET,
+            },
+        )
+        connection = (payload.get("CONNECTION") or {}).get(serial)
+        if not connection:
+            raise EzvizError(f"device {serial} has no CONNECTION data")
+        return DeviceEndpoint.from_connection(connection)
 
     async def set_defence_mode(self, mode: DefenceMode) -> None:
         """Set the account-level (all devices) defence/arm mode.
