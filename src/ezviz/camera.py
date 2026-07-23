@@ -540,7 +540,7 @@ class Camera:
             self.stream_port = endpoint.stream_port
 
     async def live(
-        self, *, quality: str = "sub", channel: int = 1
+        self, *, quality: str = "sub", channel: int = 1, receiver_port: int | None = None
     ) -> AsyncGenerator[bytes, None]:
         """Yield encoded (H.265, typically) frame chunks from the camera's
         local-SDK live stream over the LAN.
@@ -552,6 +552,13 @@ class Camera:
         already set (manually, or from a previous ``prepare_live()`` call).
         If ``media_key`` is set, encrypted-camera video is decrypted via
         ``crypto.media.StreamDecryptor``.
+
+        ``receiver_port`` overrides the local return-stream port (the command
+        socket's bound source port). It defaults (``None``) to the protocol's
+        fixed ``10101``; callers that start/stop streams frequently should pass
+        a RANDOMIZED port per session, otherwise a just-closed session's socket
+        lingering in TIME_WAIT/CLOSE_WAIT on the fixed port makes the next
+        connect fail with ``EADDRNOTAVAIL`` ("Cannot assign requested address").
         """
         if self.local_ip is None:
             await self.prepare_live()
@@ -567,6 +574,8 @@ class Camera:
             kwargs["command_port"] = self.cmd_port
         if self.stream_port is not None:
             kwargs["stream_port"] = self.stream_port
+        if receiver_port is not None:
+            kwargs["receiver_port"] = receiver_port
 
         async for chunk in _live.open_local_sdk_stream(
             host=self.local_ip,
@@ -581,7 +590,13 @@ class Camera:
             yield chunk
 
     async def download(
-        self, *, seconds: float, path: str | Path, quality: str = "sub"
+        self,
+        *,
+        seconds: float,
+        path: str | Path,
+        quality: str = "sub",
+        channel: int = 1,
+        receiver_port: int | None = None,
     ) -> int:
         """Record ``seconds`` of the live H.265 stream to ``path``; return the
         number of bytes written.
@@ -595,7 +610,9 @@ class Camera:
         written = 0
         fh = await asyncio.to_thread(Path(path).open, "wb")
         try:
-            async with aclosing(self.live(quality=quality)) as stream:
+            async with aclosing(
+                self.live(quality=quality, channel=channel, receiver_port=receiver_port)
+            ) as stream:
 
                 async def _pump() -> None:
                     nonlocal written

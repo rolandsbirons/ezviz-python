@@ -71,6 +71,41 @@ async def test_live_forwards_main_quality_stream_type(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_live_forwards_receiver_port_when_given(monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_stream(**kw):
+        seen.update(kw)
+        return
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("ezviz.streaming.live.open_local_sdk_stream", fake_stream)
+    cam = _cam(local_ip="192.168.90.253")
+    async for _ in cam.live(quality="sub", receiver_port=31234):
+        pass
+
+    assert seen["receiver_port"] == 31234
+
+
+@pytest.mark.asyncio
+async def test_live_omits_receiver_port_by_default(monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_stream(**kw):
+        seen.update(kw)
+        return
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("ezviz.streaming.live.open_local_sdk_stream", fake_stream)
+    cam = _cam(local_ip="192.168.90.253")
+    async for _ in cam.live(quality="sub"):
+        pass
+
+    # unset -> not forwarded, so open_local_sdk_stream uses its own default
+    assert "receiver_port" not in seen
+
+
+@pytest.mark.asyncio
 async def test_live_without_local_ip_raises():
     cam = _cam()
     with pytest.raises(EzvizError):

@@ -13,7 +13,7 @@ from ezviz.models import Device
 
 @pytest.mark.asyncio
 async def test_download_writes_live_bytes(tmp_path, monkeypatch):
-    async def fake_live(self, *, quality="sub"):
+    async def fake_live(self, *, quality="sub", channel=1, receiver_port=None):
         for b in (b"\x00\x00\x00\x01A", b"\x00\x00\x00\x01B"):
             yield b
 
@@ -27,7 +27,7 @@ async def test_download_writes_live_bytes(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_download_accepts_a_string_path(tmp_path, monkeypatch):
-    async def fake_live(self, *, quality="sub"):
+    async def fake_live(self, *, quality="sub", channel=1, receiver_port=None):
         yield b"\x00\x00\x00\x01X"
 
     monkeypatch.setattr(Camera, "live", fake_live)
@@ -42,7 +42,7 @@ async def test_download_accepts_a_string_path(tmp_path, monkeypatch):
 async def test_download_stops_at_the_time_limit(tmp_path, monkeypatch):
     import asyncio
 
-    async def fake_live(self, *, quality="sub"):
+    async def fake_live(self, *, quality="sub", channel=1, receiver_port=None):
         # Keeps yielding forever; download() must still return once `seconds`
         # elapses rather than hang or wait for the stream to end on its own.
         while True:
