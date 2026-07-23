@@ -50,3 +50,16 @@ class PtzDirection(Enum):
     DOWN = "DOWN"
     LEFT = "LEFT"
     RIGHT = "RIGHT"
+
+
+class Switch(Enum):
+    """Device switch ids (subset). Values confirmed against pyEzvizApi
+    constants.py::DeviceSwitchType."""
+
+    ALARM_TONE = 1
+    LIGHT = 3
+    PRIVACY = 7
+    INFRARED_LIGHT = 10
+    SLEEP = 21
+    SOUND = 22
+    MOBILE_TRACKING = 25

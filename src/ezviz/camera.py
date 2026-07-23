@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from .models import Device, PtzDirection
+from .models import Device, PtzDirection, Switch
 from .transport.http import EzvizHttp
 
 
@@ -50,3 +50,16 @@ class Camera:
                     "serial": self.serial,
                 },
             )
+
+    async def switch(self, kind: Switch, enable: bool, *, channel: int = 0) -> None:
+        """Turn a device switch on/off via the v3 path-encoded switch endpoint.
+
+        Reference: client.py::set_switch_v3 (the primary switch API that
+        switch_status() tries first) -- a bodyless ``PUT`` to
+        ``/v3/devices/{serial}/{channel}/{enable_flag}/{switch_type}/switchStatus``,
+        with the channel/enable-flag/switch-type encoded directly in the URL path.
+        """
+        assert self._http is not None
+        enable_flag = 1 if enable else 0
+        suffix = f"/{channel}/{enable_flag}/{kind.value}/switchStatus"
+        await self._http.put_device(self.serial, suffix)

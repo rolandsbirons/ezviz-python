@@ -1,11 +1,14 @@
 """Tests for Camera control methods (PTZ, switches).
 
-NOTE on a correction vs. the M1b plan draft: the plan assumed PTZ was a single
+NOTE on corrections vs. the M1b plan draft: the plan assumed PTZ was a single
 POST with a `direction=` field. Reading the actual reference
 (client.py::ptz_control, called from camera.py::move) shows it is actually
 TWO PUT calls (action=START then action=STOP) with a `command=` field carrying
-the word direction (UP/DOWN/LEFT/RIGHT), not `direction=`. Tests below reflect
-the verified contract.
+the word direction (UP/DOWN/LEFT/RIGHT), not `direction=`. It also assumed
+switches were set via a POST body (channelNo/type/enable). The reference's
+primary switch API (client.py::set_switch_v3, used by switch_status()) is
+actually a bodyless PUT with channel/enable/switch-type encoded in the URL
+PATH. Tests below reflect the verified contracts.
 """
 
 import httpx
@@ -13,7 +16,7 @@ import pytest
 import respx
 
 from ezviz.camera import Camera
-from ezviz.models import Device, PtzDirection
+from ezviz.models import Device, PtzDirection, Switch
 from ezviz.transport.http import EzvizHttp
 
 
@@ -37,3 +40,15 @@ async def test_ptz_pulses_start_then_stop_via_put():
         assert b"command=LEFT" in bodies[0] and b"action=START" in bodies[0]
         assert b"command=LEFT" in bodies[1] and b"action=STOP" in bodies[1]
         assert all(b"speed=2" in b for b in bodies)
+
+
+@pytest.mark.asyncio
+async def test_switch_privacy_on_uses_path_encoded_v3_endpoint():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/devices/AA1/0/1/7/switchStatus"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).switch(Switch.PRIVACY, True)
+            assert route.calls.last.request.headers["sessionId"] == "S"
