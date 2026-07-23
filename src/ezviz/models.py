@@ -73,3 +73,27 @@ class DefenceMode(Enum):
     HOME = 1
     AWAY = 2
     SLEEP = 3
+
+
+@dataclass(slots=True, frozen=True)
+class Alarm:
+    """One alarm/event entry. Field mapping best-effort from the reference's
+    alarm-info wrapper (client.py, API_ENDPOINT_ALARMINFO_GET) -- the request
+    params are confirmed against the reference; the exact response item keys
+    could not be independently confirmed against a live sample in this
+    snapshot, so this mapping follows the naming convention used elsewhere in
+    the reference for the same concepts (id/type/start-time/label)."""
+
+    id: str
+    type: int
+    start_ms: int
+    label: str
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> Alarm:
+        return cls(
+            id=str(data.get("alarmId", "")),
+            type=int(data.get("alarmType", 0)),
+            start_ms=int(data.get("alarmStartTime", 0)),
+            label=str(data.get("sampleName", "")),
+        )

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from .models import Device, PtzDirection, Switch
+from .models import Alarm, Device, PtzDirection, Switch
 from .transport.http import EzvizHttp
+
+ALARMS_PATH = "/v3/alarms/v2/advanced"
 
 
 class Camera:
@@ -76,3 +78,23 @@ class Camera:
         await self._http.put_device(
             self.serial, "/0/sendAlarm", {"enable": "1" if enable else "0"}
         )
+
+    async def alarms(self, *, limit: int = 20) -> list[Alarm]:
+        """List recent alarms for this camera.
+
+        Reference: client.py's alarm-info wrapper (API_ENDPOINT_ALARMINFO_GET) --
+        ``GET /v3/alarms/v2/advanced`` with params ``deviceSerials``,
+        ``queryType: -1``, ``limit``, ``stype: -1``. The plan's original guess of
+        ``pageStart``/``pageSize`` params does not match the reference.
+        """
+        assert self._http is not None
+        data = await self._http.get_json(
+            ALARMS_PATH,
+            params={
+                "deviceSerials": self.serial,
+                "queryType": "-1",
+                "limit": str(limit),
+                "stype": "-1",
+            },
+        )
+        return [Alarm.from_api(a) for a in (data.get("alarms") or [])]
