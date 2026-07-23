@@ -24,3 +24,7 @@ class RegionRedirect(AuthError):
 
 class DeviceOffline(EzvizError):
     """The target device is offline / unreachable."""
+
+
+class CryptoError(EzvizError):
+    """Decryption/crypto failure."""
