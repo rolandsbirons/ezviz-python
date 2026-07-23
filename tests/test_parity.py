@@ -9,6 +9,8 @@ specific reference function read to confirm the contract.
 """
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -17,6 +19,7 @@ from Crypto.Util.Padding import pad
 
 from ezviz.camera import Camera
 from ezviz.crypto.media import HIK_ENCRYPTION_HEADER, derive_key, password_hash
+from ezviz.exceptions import EzvizError
 from ezviz.models import Device
 from ezviz.transport.http import EzvizHttp
 
@@ -94,3 +97,36 @@ async def test_alarm_image_skips_decrypt_when_requested():
                 "https://img.example.com/alarm.jpg", decrypt=False
             )
     assert data == ciphertext
+
+
+# --- Task 3: ptz_to(x, y) -- reference: client.py::ptz_control_coordinates --
+
+
+@pytest.mark.asyncio
+async def test_ptz_to_sends_iot_feature_action_json_body():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/iot-feature/action/AA1/Video_1/1/"
+                "PTZManualCtrl/CtrlPTZ3DPosition"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).ptz_to(0.25, 0.75)
+        req = route.calls.last.request
+        assert req.headers["sessionId"] == "S"
+        assert req.headers["Content-Type"] == "application/json"
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "positionCtrlType": "point",
+        "positionPoint": {"x": 0.25, "y": 0.75},
+        "positionRect": {"height": 1.0, "width": 1.0, "x": 0.0, "y": 0.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_ptz_to_rejects_out_of_range_coordinates():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        with pytest.raises(EzvizError):
+            await _cam(http).ptz_to(1.5, 0.5)
+        with pytest.raises(EzvizError):
+            await _cam(http).ptz_to(0.5, -0.1)

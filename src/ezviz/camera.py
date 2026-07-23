@@ -31,6 +31,8 @@ ALARMS_PATH = "/v3/alarms/v2/advanced"
 RECORDS_PATH = "/v3/streaming/v2/records"
 # Reference: client.py::capture_picture -- PUT /v3/devconfig/v1/{serial}/{channel}/capture.
 CAPTURE_PATH_TEMPLATE = "/v3/devconfig/v1/{serial}/{channel}/capture"
+# Reference: client.py::_iot_request / API_ENDPOINT_IOT_ACTION.
+IOT_ACTION_PATH = "/v3/iot-feature/action"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -154,6 +156,35 @@ class Camera:
                     "serial": self.serial,
                 },
             )
+
+    async def ptz_to(
+        self, x: float, y: float, *, resource_identifier: str = "Video_1", local_index: str = "1"
+    ) -> None:
+        """Move the PTZ camera to a normalized ``(x, y)`` point (each 0..1).
+
+        Reference: client.py::ptz_control_coordinates -- ``PUT
+        /v3/iot-feature/action/{SERIAL_UPPER}/{resource_identifier}/{local_index}/
+        PTZManualCtrl/CtrlPTZ3DPosition`` with a JSON (not form) body:
+        ``{"positionCtrlType": "point", "positionPoint": {"x", "y"},
+        "positionRect": {"height": 1.0, "width": 1.0, "x": 0.0, "y": 0.0}}``.
+        """
+        if not 0 <= x <= 1:
+            raise EzvizError(f"invalid x coordinate: {x} (should be between 0 and 1 inclusive)")
+        if not 0 <= y <= 1:
+            raise EzvizError(f"invalid y coordinate: {y} (should be between 0 and 1 inclusive)")
+        assert self._http is not None
+        path = (
+            f"{IOT_ACTION_PATH}/{self.serial.upper()}/{resource_identifier}/{local_index}"
+            "/PTZManualCtrl/CtrlPTZ3DPosition"
+        )
+        await self._http.put_json(
+            path,
+            {
+                "positionCtrlType": "point",
+                "positionPoint": {"x": x, "y": y},
+                "positionRect": {"height": 1.0, "width": 1.0, "x": 0.0, "y": 0.0},
+            },
+        )
 
     async def switch(self, kind: Switch, enable: bool, *, channel: int = 0) -> None:
         """Turn a device switch on/off via the v3 path-encoded switch endpoint.
