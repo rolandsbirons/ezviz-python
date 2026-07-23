@@ -14,9 +14,10 @@ import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from .crypto.media import HIK_ENCRYPTION_HEADER, decrypt_image
 from .exceptions import EzvizError
 from .models import Alarm, Device, PtzDirection, Record, Switch
 from .streaming import live as _live
@@ -28,6 +29,50 @@ if TYPE_CHECKING:
 
 ALARMS_PATH = "/v3/alarms/v2/advanced"
 RECORDS_PATH = "/v3/streaming/v2/records"
+# Reference: client.py::capture_picture -- PUT /v3/devconfig/v1/{serial}/{channel}/capture.
+CAPTURE_PATH_TEMPLATE = "/v3/devconfig/v1/{serial}/{channel}/capture"
+# Known response keys that may carry the captured picture's URL. Reference:
+# client.py::_first_image_url -- the reference itself treats this defensively
+# (the exact key varies by firmware/response variant), so this ports the
+# same candidate-key list and recursive-search behavior, not a single guess.
+_IMAGE_URL_KEYS = (
+    "picUrl", "picURL", "imageUrl", "imageURL",
+    "captureUrl", "captureURL", "pic", "pics", "image", "url",
+)
+
+
+def _first_image_url(value: Any) -> str | None:
+    """Recursively search a capture-picture response for a known image URL key.
+
+    Reference: client.py::_first_image_url, ported faithfully -- candidate
+    values may contain multiple ``;``-separated URLs, only the first
+    ``http(s)://`` one is used.
+    """
+
+    def normalize(candidate: Any) -> str | None:
+        if not isinstance(candidate, str):
+            return None
+        for part in candidate.split(";"):
+            text = part.strip()
+            if text.startswith(("http://", "https://")):
+                return text
+        return None
+
+    if isinstance(value, dict):
+        for key in _IMAGE_URL_KEYS:
+            found = normalize(value.get(key))
+            if found:
+                return found
+        for item in value.values():
+            found = _first_image_url(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _first_image_url(item)
+            if found:
+                return found
+    return None
 
 # quality -> (receiver_stream_type, receiver_new_stream_type); see
 # protocol/local_sdk.py's module docstring for what these select.
@@ -183,6 +228,43 @@ class Camera:
             },
         )
         return [Record.from_api(r) for r in (data.get("records") or [])]
+
+    def _decrypt_if_encrypted(self, image_data: bytes) -> bytes:
+        """Decrypt ``image_data`` with ``media_key`` if it looks like a
+        hikencodepicture payload; return it unchanged otherwise.
+
+        Reference: client.py::download_alarm_image -- only attempts decrypt
+        when the ``HIK_ENCRYPTION_HEADER`` is actually present in the body.
+        """
+        if not image_data or HIK_ENCRYPTION_HEADER not in image_data:
+            return image_data
+        if self.media_key is None:
+            raise EzvizError(
+                f"camera {self.serial} has no media_key set to decrypt this image"
+            )
+        return decrypt_image(image_data, self.media_key)
+
+    async def snapshot(self, *, channel: int = 1) -> bytes:
+        """Trigger a snapshot capture and return the decrypted image bytes.
+
+        Reference: client.py::capture_picture (trigger) -- ``PUT
+        /v3/devconfig/v1/{serial}/{channel}/capture`` -- followed by the
+        reference's own ``save_image``/``download_alarm_image`` flow: extract
+        the picture URL from the capture response (``_first_image_url``'s
+        defensive multi-key search), download it, and decrypt with
+        ``media_key`` if it carries the ``hikencodepicture`` header.
+        """
+        assert self._http is not None
+        data = await self._http.put_form(
+            CAPTURE_PATH_TEMPLATE.format(serial=self.serial, channel=channel)
+        )
+        image_url = _first_image_url(data)
+        if image_url is None:
+            raise EzvizError(
+                f"camera {self.serial} capture response did not include an image URL"
+            )
+        image_data = await self._http.get_bytes(image_url)
+        return self._decrypt_if_encrypted(image_data)
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,

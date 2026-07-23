@@ -96,6 +96,34 @@ class EzvizHttp:
         payload: dict[str, Any] = resp.json()
         return self._unwrap(payload, path)
 
+    async def get_bytes(self, url: str) -> bytes:
+        """GET a URL and return the raw response body.
+
+        ``url`` is typically an absolute image-CDN URL (picture/alarm-image
+        download links point off the account API host); httpx uses an
+        absolute URL as-is instead of joining it with ``base_url``, while
+        this still carries the same session headers as every other call
+        (reference: ``client.py``'s ``_http_request`` sends the persistent
+        session's headers on every request, image downloads included).
+        """
+        resp = await self._client.get(url, headers=self._session_headers())
+        resp.raise_for_status()
+        return resp.content
+
+    async def put_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """PUT a JSON body (vs. :meth:`put_form`'s form encoding).
+
+        Reference: client.py::_iot_request -- explicitly sets
+        ``Content-Type: application/json`` and a ``json.dumps`` body for the
+        IoT feature/action endpoints (e.g. PTZ coordinate control), unlike
+        the form-encoded ``PUT``s used elsewhere in the API.
+        """
+        headers = {**self._session_headers(), "Content-Type": "application/json"}
+        resp = await self._client.put(path, json=payload, headers=headers)
+        resp.raise_for_status()
+        body: dict[str, Any] = resp.json()
+        return self._unwrap(body, path)
+
     async def put_form(self, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         resp = await self._client.put(path, data=data, headers=self._session_headers())
         resp.raise_for_status()
