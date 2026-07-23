@@ -1,20 +1,49 @@
 """Camera object — status view + device controls (PTZ, switches, siren, alarms,
-SD records). Live streaming/playback come in later milestones."""
+SD records, live H.265 stream). SD playback/download come in later milestones."""
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
+from .exceptions import EzvizError
 from .models import Alarm, Device, PtzDirection, Record, Switch
+from .streaming import live as _live
 from .transport.http import EzvizHttp
 
 ALARMS_PATH = "/v3/alarms/v2/advanced"
 RECORDS_PATH = "/v3/streaming/v2/records"
 
+# quality -> (receiver_stream_type, receiver_new_stream_type); see
+# protocol/local_sdk.py's module docstring for what these select.
+_LIVE_QUALITY_STREAM_TYPES: dict[str, tuple[str, int]] = {
+    "sub": ("SUB", 2),
+    "main": ("MAIN", 1),
+}
+
 
 class Camera:
-    def __init__(self, device: Device, *, http: EzvizHttp | None = None) -> None:
+    def __init__(
+        self,
+        device: Device,
+        *,
+        http: EzvizHttp | None = None,
+        local_ip: str | None = None,
+        media_key: str | None = None,
+        device_key: bytes | None = None,
+        operation_code: str | None = None,
+    ) -> None:
         self._device = device
         self._http = http
+        #: LAN address for the local-SDK live stream (see ``live()``).
+        self.local_ip = local_ip
+        #: Verification code, used to decrypt encrypted-camera live video.
+        self.media_key = media_key
+        #: Local-control AES key (``EzvizCasDeviceInfo.key_bytes`` in the
+        #: reference) -- required for a real ``live()`` connection; not
+        #: fetched automatically (see streaming/live.py's CAS-gap note).
+        self.device_key = device_key
+        #: Local-control operation code (``EzvizCasDeviceInfo.operation_code``).
+        self.operation_code = operation_code
 
     @property
     def serial(self) -> str:
@@ -127,3 +156,34 @@ class Camera:
             },
         )
         return [Record.from_api(r) for r in (data.get("records") or [])]
+
+    async def live(
+        self, *, quality: str = "sub", channel: int = 1
+    ) -> AsyncIterator[bytes]:
+        """Yield encoded (H.265, typically) frame chunks from the camera's
+        local-SDK live stream over the LAN.
+
+        ``quality="sub"`` (default) selects the low-res sub-stream
+        (``receiver_new_stream_type=2``); ``quality="main"`` selects the
+        full-res main stream. Requires ``local_ip``; for a real connection
+        also requires ``device_key``/``operation_code`` (see streaming/live.py
+        for why those aren't auto-fetched yet). If ``media_key`` is set,
+        encrypted-camera video is decrypted via ``crypto.media.StreamDecryptor``.
+        """
+        if self.local_ip is None:
+            raise EzvizError(f"camera {self.serial} has no local_ip set for live streaming")
+        try:
+            stream_type, new_stream_type = _LIVE_QUALITY_STREAM_TYPES[quality]
+        except KeyError:
+            raise EzvizError(f"unknown live stream quality {quality!r}") from None
+
+        async for chunk in _live.open_local_sdk_stream(
+            host=self.local_ip,
+            operation_code=self.operation_code,
+            device_key=self.device_key,
+            channel=channel,
+            media_key=self.media_key,
+            receiver_stream_type=stream_type,
+            receiver_new_stream_type=new_stream_type,
+        ):
+            yield chunk
