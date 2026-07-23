@@ -88,6 +88,32 @@ async def test_live_forwards_receiver_port_when_given(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_live_forwards_receiver_port_through_real_wrapper(monkeypatch):
+    # Patches the PROTOCOL layer (not the streaming wrapper), so the real
+    # streaming.live.open_local_sdk_stream runs -- catches a wrapper that
+    # accepts receiver_port on Camera.live() but drops it before the protocol
+    # call (which a fake_stream(**kw) mock would silently swallow).
+    seen: dict[str, object] = {}
+
+    async def fake_protocol_stream(host, **kw):
+        seen["host"] = host
+        seen.update(kw)
+        return
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        "ezviz.protocol.local_sdk.open_local_sdk_stream", fake_protocol_stream
+    )
+    cam = _cam(local_ip="192.168.90.253")
+    cam.operation_code = "OPCODE1"
+    cam.device_key = b"1234567890abcdef"
+    async for _ in cam.live(quality="sub", receiver_port=41000):
+        pass
+
+    assert seen["receiver_port"] == 41000
+
+
+@pytest.mark.asyncio
 async def test_live_omits_receiver_port_by_default(monkeypatch):
     seen: dict[str, object] = {}
 

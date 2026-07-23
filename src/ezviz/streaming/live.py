@@ -24,6 +24,7 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     receiver_new_stream_type: int = 2,
     command_port: int = local_sdk.DEFAULT_COMMAND_PORT,
     stream_port: int = local_sdk.DEFAULT_STREAM_PORT,
+    receiver_port: int = local_sdk.DEFAULT_RECEIVER_PORT,
 ) -> AsyncIterator[bytes]:
     """Validate local-SDK control-frame credentials and open the live stream.
 
@@ -49,5 +50,6 @@ async def open_local_sdk_stream(  # noqa: PLR0913
         receiver_new_stream_type=receiver_new_stream_type,
         command_port=command_port,
         stream_port=stream_port,
+        receiver_port=receiver_port,
     ):
         yield chunk
