@@ -25,6 +25,18 @@ HIK_ENCRYPTION_HEADER = b"hikencodepicture"
 _HASH_LEN = 32  # length of the hex-encoded double-MD5 file hash in each segment
 _FIXED_IV = bytes([48, 49, 50, 51, 52, 53, 54, 55, 0, 0, 0, 0, 0, 0, 0, 0])
 
+# --- Live video (H.264/HEVC NAL) decrypt ------------------------------------
+#
+# Reference: pyEzvizApi stream.py::decrypt_hikvision_ps_video /
+# ::_hikvision_aes_ecb_cipher. Unlike the still-image scheme above, live video
+# NAL units are encrypted with AES-ECB (no IV) -- only the first
+# HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH bytes of each NAL unit's body (the
+# bytes after the Annex-B start code + NAL header) are encrypted, in whole
+# 16-byte blocks. The key uses the same derive_key() as image decrypt --
+# confirmed identical to the reference's own `key_bytes.ljust(16, b"\0")[:16]`.
+ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
+HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH = 4096
+
 
 def password_hash(password: str) -> str:
     """Double-MD5 hex digest of the verification code.
@@ -116,3 +128,68 @@ def _decrypt_segment(block: bytes, password: str, header_len: int, hash_end: int
         if 0 < pad_len <= AES.block_size:
             plain = plain[: len(plain) - pad_len]
     return plain
+
+
+def _find_nal_starts(data: bytes) -> list[int]:
+    """Return offsets of Annex-B long start codes (``00 00 00 01``) in ``data``."""
+    starts: list[int] = []
+    idx = data.find(ANNEX_B_START_CODE)
+    while idx != -1:
+        starts.append(idx)
+        idx = data.find(ANNEX_B_START_CODE, idx + 1)
+    return starts
+
+
+def _decrypt_nal_prefixes(data: bytes, key: bytes, nalu_header_size: int) -> bytes:
+    """Decrypt the encrypted AES-ECB prefix of every NAL unit found in ``data``.
+
+    Reference: pyEzvizApi stream.py::decrypt_hikvision_ps_video. This is a
+    SIMPLIFIED port -- see StreamDecryptor's docstring for the known
+    limitations vs. the reference's full MPEG-PS/PES-boundary-aware version.
+    """
+    starts = _find_nal_starts(data)
+    if not starts:
+        return data
+
+    output = bytearray(data)
+    block_size = AES.block_size
+    for index, start in enumerate(starts):
+        body_start = start + len(ANNEX_B_START_CODE) + nalu_header_size
+        body_end = starts[index + 1] if index + 1 < len(starts) else len(data)
+        prefix_end = min(body_end, body_start + HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH)
+        aligned_len = ((prefix_end - body_start) // block_size) * block_size
+        if aligned_len <= 0:
+            continue
+        aligned_end = body_start + aligned_len
+        cipher = AES.new(key, AES.MODE_ECB)  # nosec - protocol compatibility, not general crypto
+        output[body_start:aligned_end] = cipher.decrypt(bytes(output[body_start:aligned_end]))
+    return bytes(output)
+
+
+class StreamDecryptor:
+    """Decrypts EZVIZ/Hikvision encrypted H.264/HEVC NAL units in an Annex-B
+    byte stream, keyed by the camera's verification code.
+
+    Reference: pyEzvizApi stream.py::decrypt_hikvision_ps_video /
+    ::_hikvision_aes_ecb_cipher. Only the first
+    HIKVISION_NAL_ENCRYPTED_PREFIX_LENGTH bytes of each NAL unit's body are
+    AES-ECB-encrypted (no IV -- unlike the still-image AES-CBC scheme above);
+    everything past that prefix, and any trailing partial 16-byte block within
+    it, is already plaintext.
+
+    KNOWN LIMITATION (flag for real-camera validation): this is a simplified
+    port. The reference tracks partial-NAL decrypt state across MPEG-PS PES
+    packet boundaries (``active_nal``/``active_nal_decrypted`` in
+    decrypt_hikvision_ps_video) and filters by video-PES stream id; this class
+    processes each ``update()`` call as a self-contained buffer and treats any
+    Annex-B start code as a NAL boundary. Feed it NAL-aligned chunks (e.g. one
+    local-SDK media packet at a time); a NAL split across two ``update()``
+    calls will not have its post-split prefix bytes decrypted correctly.
+    """
+
+    def __init__(self, media_key: str, *, nalu_header_size: int = 2) -> None:
+        self._key = derive_key(media_key)
+        self._nalu_header_size = nalu_header_size
+
+    def update(self, data: bytes) -> bytes:
+        return _decrypt_nal_prefixes(data, self._key, self._nalu_header_size)
