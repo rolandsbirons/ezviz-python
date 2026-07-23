@@ -79,25 +79,47 @@ class DefenceMode(Enum):
 
 @dataclass(slots=True, frozen=True)
 class Alarm:
-    """One alarm/event entry. Field mapping best-effort from the reference's
-    alarm-info wrapper (client.py, API_ENDPOINT_ALARMINFO_GET) -- the request
-    params are confirmed against the reference; the exact response item keys
-    could not be independently confirmed against a live sample in this
-    snapshot, so this mapping follows the naming convention used elsewhere in
-    the reference for the same concepts (id/type/start-time/label)."""
+    """One alarm/event entry from ``/v3/alarms/v2/advanced``
+    (API_ENDPOINT_ALARMINFO_GET; request params confirmed against
+    client.py::get_alarminfo).
+
+    pyEzvizApi itself never parses this endpoint's item fields anywhere --
+    ``get_alarminfo`` returns the raw payload untouched, so there is no
+    reference function to read for the item schema (the earlier ``label``
+    mapping's ``sampleName`` guess came from an unrelated code path, the
+    *unified message* normalizer, not this endpoint). The item keys below are
+    instead confirmed against a real, working consumer of this exact
+    endpoint: the camera-soc bridge (``app.py``'s ``api_alarms``/
+    ``alarm_media``/``poll_alarms_once``), which reads ``alarmId``,
+    ``alarmType``, ``alarmStartTime``, ``alarmStartTimeStr``, ``alarmName``,
+    ``isEncrypt``, ``picUrl`` directly off these items.
+    """
 
     id: str
     type: int
     start_ms: int
+    #: Alarm label. Kept for backward compat; now sourced the same as
+    #: ``name`` (``alarmName``), with a defensive fallback to the unrelated-
+    #: endpoint key ``sampleName`` in case an older/different response shape
+    #: is ever encountered.
     label: str
+    pic_url: str
+    time_str: str
+    name: str
+    encrypted: bool
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> Alarm:
+        name = str(data.get("alarmName") or data.get("sampleName") or "")
         return cls(
             id=str(data.get("alarmId", "")),
             type=int(data.get("alarmType", 0)),
             start_ms=int(data.get("alarmStartTime", 0)),
-            label=str(data.get("sampleName", "")),
+            label=name,
+            pic_url=str(data.get("picUrl", "")),
+            time_str=str(data.get("alarmStartTimeStr", "")),
+            name=name,
+            encrypted=bool(data.get("isEncrypt", False)),
         )
 
 

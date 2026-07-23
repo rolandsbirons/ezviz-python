@@ -235,7 +235,10 @@ class Camera:
         Reference: client.py's alarm-info wrapper (API_ENDPOINT_ALARMINFO_GET) --
         ``GET /v3/alarms/v2/advanced`` with params ``deviceSerials``,
         ``queryType: -1``, ``limit``, ``stype: -1``. The plan's original guess of
-        ``pageStart``/``pageSize`` params does not match the reference.
+        ``pageStart``/``pageSize`` params does not match the reference. See
+        ``Alarm``'s docstring for the item-key schema (confirmed against the
+        camera-soc bridge, a real consumer of this exact endpoint -- the
+        reference itself never parses these items).
         """
         assert self._http is not None
         data = await self._http.get_json(
