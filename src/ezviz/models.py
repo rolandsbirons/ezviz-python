@@ -39,3 +39,14 @@ class Device:
             online=int(data.get("status", 0)) == 1,
             category=str(data.get("deviceCategory", "")),
         )
+
+
+class PtzDirection(Enum):
+    """PTZ move direction. Reference: client.py::ptz_control/camera.py::move --
+    the wire value is the word direction uppercased (sent as the `command`
+    field), not a numeric code."""
+
+    UP = "UP"
+    DOWN = "DOWN"
+    LEFT = "LEFT"
+    RIGHT = "RIGHT"

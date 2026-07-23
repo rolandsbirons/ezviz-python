@@ -67,6 +67,20 @@ class EzvizHttp:
         payload: dict[str, Any] = resp.json()
         return self._unwrap(payload, path)
 
+    async def put_form(self, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        resp = await self._client.put(path, data=data, headers=self._session_headers())
+        resp.raise_for_status()
+        payload: dict[str, Any] = resp.json()
+        return self._unwrap(payload, path)
+
+    async def post_device(self, serial: str, suffix: str, data: dict[str, Any]) -> dict[str, Any]:
+        return await self.post_form(f"/v3/devices/{serial}{suffix}", data)
+
+    async def put_device(
+        self, serial: str, suffix: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return await self.put_form(f"/v3/devices/{serial}{suffix}", data)
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

@@ -27,7 +27,7 @@ class EzvizClient:
         out: dict[str, Camera] = {}
         for info in payload.get("deviceInfos", []) or []:
             dev = Device.from_api(info)
-            out[dev.serial] = Camera(dev)
+            out[dev.serial] = Camera(dev, http=self._http)
         return out
 
     async def aclose(self) -> None:
