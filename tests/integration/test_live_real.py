@@ -1,19 +1,17 @@
 """Real-camera end-to-end smoke test for Camera.live() (local-SDK path).
 
 Skipped entirely unless the required EZVIZ_TEST_* env vars are set -- this
-test makes real network calls (cloud login + a LAN TCP connection to the
-camera) and is NOT run as part of the normal unit-test suite / CI gate.
+test makes real network calls (cloud login, the CAS cloud TLS protocol, and
+a LAN TCP connection to the camera) and is NOT run as part of the normal
+unit-test suite / CI gate.
+
+As of M2b, live streaming is self-serving: cam.live() calls
+cam.prepare_live() automatically, which fetches CAS local-control
+credentials + the LAN endpoint from the account -- no manual device_key/
+operation_code/local_ip needed anymore.
 
 Required:
   EZVIZ_TEST_ACCOUNT, EZVIZ_TEST_PASSWORD, EZVIZ_TEST_SERIAL
-
-Also required for a REAL connection (see the CAS-gap note in
-streaming/live.py and protocol/local_sdk.py -- this library does not yet
-port the CAS protocol used to fetch these, so they must be supplied
-out-of-band by whoever runs this test):
-  EZVIZ_TEST_LOCAL_IP       camera's LAN IP (CONNECTION.localIp)
-  EZVIZ_TEST_DEVICE_KEY     local-control AES key, hex-encoded (16 bytes)
-  EZVIZ_TEST_OPERATION_CODE local-control operation code
 
 Optional:
   EZVIZ_TEST_CODE           camera verification code, enables video decrypt
@@ -28,14 +26,7 @@ import pytest
 from ezviz import EzvizClient
 from ezviz.crypto.media import ANNEX_B_START_CODE
 
-_REQUIRED_VARS = (
-    "EZVIZ_TEST_ACCOUNT",
-    "EZVIZ_TEST_PASSWORD",
-    "EZVIZ_TEST_SERIAL",
-    "EZVIZ_TEST_LOCAL_IP",
-    "EZVIZ_TEST_DEVICE_KEY",
-    "EZVIZ_TEST_OPERATION_CODE",
-)
+_REQUIRED_VARS = ("EZVIZ_TEST_ACCOUNT", "EZVIZ_TEST_PASSWORD", "EZVIZ_TEST_SERIAL")
 _MISSING = [name for name in _REQUIRED_VARS if not os.getenv(name)]
 
 
@@ -56,11 +47,13 @@ async def test_live_stream_yields_annex_b_packets():
         await ez.login(os.environ["EZVIZ_TEST_ACCOUNT"], os.environ["EZVIZ_TEST_PASSWORD"])
         cams = await ez.cameras()
         cam = cams[serial]
-
-        cam.local_ip = os.environ["EZVIZ_TEST_LOCAL_IP"]
-        cam.device_key = bytes.fromhex(os.environ["EZVIZ_TEST_DEVICE_KEY"])
-        cam.operation_code = os.environ["EZVIZ_TEST_OPERATION_CODE"]
         cam.media_key = os.environ.get("EZVIZ_TEST_CODE")
+
+        # Self-serves local_ip/device_key/operation_code via CAS + the device
+        # LAN endpoint lookup; live() would also call this automatically, but
+        # calling it explicitly here makes the two phases visible in a
+        # failure/timing sense (credential fetch vs. the live TCP stream).
+        await cam.prepare_live()
 
         packets: list[bytes] = []
 
