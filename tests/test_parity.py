@@ -346,3 +346,28 @@ async def test_smart_detection_off_sends_type_0():
             await _cam(http).smart_detection(False)
         sent = urllib.parse.unquote_plus(route.calls.last.request.content.decode())
     assert '"type":0' in sent
+
+
+# --- Task 11: p2p_info() -- reference: client.py::get_p2p_server_info -------
+
+
+@pytest.mark.asyncio
+async def test_p2p_info_gets_userdevices_p2p_endpoint():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.get(
+                "https://apiieu.ezvizlife.com/v3/userdevices/v1/devices/p2p"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "meta": {"code": 200},
+                        "p2p": {"AA1": {"clusterId": "c1", "domainId": "d1"}},
+                    },
+                )
+            )
+            info = await _cam(http).p2p_info()
+        sent = route.calls.last.request.url.params
+    assert sent["deviceSerials"] == "AA1"
+    assert info["p2p"] == {"AA1": {"clusterId": "c1", "domainId": "d1"}}

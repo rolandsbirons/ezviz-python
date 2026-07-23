@@ -48,6 +48,8 @@ REBOOT_PATH_TEMPLATE = "/api/device/v2/sysOper/{serial}"
 MESSAGES_PATH = "/v3/unifiedmsg/list"
 # Reference: constants.py::DEFAULT_UNIFIEDMSG_STYPE.
 _DEFAULT_UNIFIEDMSG_STYPE = "92"
+# Reference: client.py::get_p2p_server_info / API_ENDPOINT_USERDEVICES_P2P_INFO.
+P2P_INFO_PATH = "/v3/userdevices/v1/devices/p2p"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -454,6 +456,18 @@ class Camera:
         used by ``night_vision``).
         """
         await self._set_config_key("Alarm_DetectHumanCar", f'{{"type":{1 if enable else 0}}}')
+
+    async def p2p_info(self) -> dict[str, Any]:
+        """Fetch this camera's P2P server info (cluster/domain routing used
+        to establish local/relay P2P connections).
+
+        Reference: client.py::get_p2p_server_info -- ``GET
+        /v3/userdevices/v1/devices/p2p`` with params ``{"deviceSerials":
+        serial}``. Returns the full response payload (standard ``meta``
+        envelope), same as the reference (no further unwrapping).
+        """
+        assert self._http is not None
+        return await self._http.get_json(P2P_INFO_PATH, params={"deviceSerials": self.serial})
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
