@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from .models import Alarm, Device, PtzDirection, Switch
+from .models import Alarm, Device, PtzDirection, Record, Switch
 from .transport.http import EzvizHttp
 
 ALARMS_PATH = "/v3/alarms/v2/advanced"
+RECORDS_PATH = "/v3/streaming/v2/records"
 
 
 class Camera:
@@ -98,3 +99,31 @@ class Camera:
             },
         )
         return [Alarm.from_api(a) for a in (data.get("alarms") or [])]
+
+    async def records(
+        self, *, date: str, channel: int = 1, size: int = 20
+    ) -> list[Record]:
+        """List SD-card recording time-range segments for one calendar day (UTC).
+
+        Reference: client.py::search_records_v2 -- ``GET /v3/streaming/v2/records``
+        with params ``deviceSerial``, ``channelNo``, ``startTime``, ``stopTime``,
+        ``size``, ``sortBy``, ``requireLabel``. Results come from the response's
+        top-level ``records`` key (reference: extract_record_list's key-search
+        order, which tries ``records`` first). The single-``date`` convenience
+        (vs. an explicit start/stop window) is this library's own addition -- the
+        reference always takes a caller-supplied start/stop range.
+        """
+        assert self._http is not None
+        data = await self._http.get_json(
+            RECORDS_PATH,
+            params={
+                "deviceSerial": self.serial,
+                "channelNo": str(channel),
+                "startTime": f"{date}T00:00:00Z",
+                "stopTime": f"{date}T23:59:59Z",
+                "size": str(size),
+                "sortBy": "0",
+                "requireLabel": "0",
+            },
+        )
+        return [Record.from_api(r) for r in (data.get("records") or [])]

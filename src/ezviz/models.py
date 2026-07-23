@@ -97,3 +97,47 @@ class Alarm:
             start_ms=int(data.get("alarmStartTime", 0)),
             label=str(data.get("sampleName", "")),
         )
+
+
+def _first_int(*values: Any) -> int:
+    """Return the first value that converts cleanly to int, else 0."""
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+@dataclass(slots=True, frozen=True)
+class Record:
+    """One SD-card recording time-range segment (no download URL -- that's a
+    separate, later API). Reference: client.py::search_records_v2 (request) +
+    extract_record_list (response's top-level "records" key). Item field
+    aliases mirror the defensive multi-key fallback the reference CLI itself
+    uses when displaying records (__main__.py::_handle_records), since the
+    exact key used by any given firmware/response variant isn't fixed."""
+
+    start_ms: int
+    stop_ms: int
+    type: int
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> Record:
+        return cls(
+            start_ms=_first_int(
+                data.get("begin"), data.get("B"), data.get("startTime"), data.get("startTimeStr")
+            ),
+            stop_ms=_first_int(
+                data.get("end"), data.get("E"), data.get("stopTime"), data.get("stopTimeStr")
+            ),
+            type=_first_int(
+                data.get("type"),
+                data.get("Type"),
+                data.get("recordType"),
+                data.get("videoType"),
+                data.get("recType"),
+            ),
+        )
