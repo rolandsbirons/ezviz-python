@@ -266,6 +266,19 @@ class Camera:
         image_data = await self._http.get_bytes(image_url)
         return self._decrypt_if_encrypted(image_data)
 
+    async def alarm_image(self, url: str, *, decrypt: bool = True) -> bytes:
+        """Download an alarm-event image, decrypting it if requested.
+
+        Reference: client.py::download_alarm_image -- GET the (absolute)
+        ``url`` directly; if ``decrypt`` and the body carries the
+        ``hikencodepicture`` header, decrypt with ``media_key``.
+        """
+        assert self._http is not None
+        image_data = await self._http.get_bytes(url)
+        if not decrypt:
+            return image_data
+        return self._decrypt_if_encrypted(image_data)
+
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
         so ``live()`` can connect without manual creds.

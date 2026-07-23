@@ -60,3 +60,37 @@ async def test_snapshot_triggers_capture_then_downloads_and_decrypts():
             data = await _cam(http, media_key=pw).snapshot()
         assert capture_route.calls.last.request.headers["sessionId"] == "S"
     assert data == plain
+
+
+# --- Task 2: alarm_image() -- reference: client.py::download_alarm_image ----
+
+
+@pytest.mark.asyncio
+async def test_alarm_image_downloads_and_decrypts_by_default():
+    pw = "ABCDEF01"
+    plain = b"ALARMJPEG"
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.get("https://img.example.com/alarm.jpg").mock(
+                return_value=httpx.Response(200, content=_encrypt_segment(plain, pw))
+            )
+            data = await _cam(http, media_key=pw).alarm_image("https://img.example.com/alarm.jpg")
+        assert route.calls.last.request.headers["sessionId"] == "S"
+    assert data == plain
+
+
+@pytest.mark.asyncio
+async def test_alarm_image_skips_decrypt_when_requested():
+    pw = "ABCDEF01"
+    ciphertext = _encrypt_segment(b"plain", pw)
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.get("https://img.example.com/alarm.jpg").mock(
+                return_value=httpx.Response(200, content=ciphertext)
+            )
+            data = await _cam(http, media_key=pw).alarm_image(
+                "https://img.example.com/alarm.jpg", decrypt=False
+            )
+    assert data == ciphertext
