@@ -275,3 +275,42 @@ async def test_reboot_raises_on_nonzero_result_code():
             )
             with pytest.raises(EzvizError):
                 await _cam(http).reboot()
+
+
+# --- Task 9: messages(limit=20) -- reference: client.py::get_device_messages_list
+
+
+@pytest.mark.asyncio
+async def test_messages_gets_unifiedmsg_list():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.get("https://apiieu.ezvizlife.com/v3/unifiedmsg/list").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "meta": {"code": 200},
+                        "message": [{"deviceSerial": "AA1", "alarmType": 1}],
+                    },
+                )
+            )
+            msgs = await _cam(http).messages(limit=5)
+        sent = route.calls.last.request.url.params
+    assert sent["serials"] == "AA1"
+    assert sent["stype"] == "92"
+    assert sent["limit"] == "5"
+    assert msgs == [{"deviceSerial": "AA1", "alarmType": 1}]
+
+
+@pytest.mark.asyncio
+async def test_messages_falls_back_to_messages_key():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.get("https://apiieu.ezvizlife.com/v3/unifiedmsg/list").mock(
+                return_value=httpx.Response(
+                    200, json={"meta": {"code": 200}, "messages": [{"deviceSerial": "AA1"}]}
+                )
+            )
+            msgs = await _cam(http).messages()
+    assert msgs == [{"deviceSerial": "AA1"}]

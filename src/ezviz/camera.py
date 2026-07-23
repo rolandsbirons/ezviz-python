@@ -44,6 +44,10 @@ DO_NOT_DISTURB_PATH_TEMPLATE = "/v3/alarms/{serial}/{channel}/nodisturb"
 # Reference: client.py::reboot_camera / API_ENDPOINT_DEVICE_SYS_OPERATION.
 # Another "resultCode" (not "meta") envelope.
 REBOOT_PATH_TEMPLATE = "/api/device/v2/sysOper/{serial}"
+# Reference: client.py::get_device_messages_list / API_ENDPOINT_UNIFIEDMSG_LIST_GET.
+MESSAGES_PATH = "/v3/unifiedmsg/list"
+# Reference: constants.py::DEFAULT_UNIFIEDMSG_STYPE.
+_DEFAULT_UNIFIEDMSG_STYPE = "92"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -415,6 +419,31 @@ class Camera:
         )
         if str(payload.get("resultCode")) != "0":
             raise EzvizError(f"could not reboot device: {payload}")
+
+    async def messages(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """List recent unified alarm/message entries for this camera.
+
+        Reference: client.py::get_device_messages_list -- ``GET
+        /v3/unifiedmsg/list`` with params ``serials``, ``stype`` (default
+        ``"92"``, ``DEFAULT_UNIFIEDMSG_STYPE``), ``limit``, ``date``,
+        ``endTime`` (the app sends empty ``date``/``endTime`` for "most
+        recent"). Items come from the response's ``message`` key, falling
+        back to ``messages`` (confirmed via camera.py's own
+        ``response.get("message") or response.get("messages")`` fallback).
+        """
+        assert self._http is not None
+        data = await self._http.get_json(
+            MESSAGES_PATH,
+            params={
+                "serials": self.serial,
+                "stype": _DEFAULT_UNIFIEDMSG_STYPE,
+                "limit": str(limit),
+                "date": "",
+                "endTime": "",
+            },
+        )
+        messages = data.get("message") or data.get("messages") or []
+        return [m for m in messages if isinstance(m, dict)]
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
