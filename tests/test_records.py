@@ -11,7 +11,22 @@ end/E/stopTime/stopTimeStr for stop, type/Type/recordType/videoType/recType for
 type) are based on the defensive multi-key fallback actually used by the
 reference CLI's record display code (__main__.py::_handle_records) -- broader
 and more evidence-based than the plan's original two-key fallback.
+
+NOTE on a real-camera bug fix: a real camera's response has "records" as a
+base64+zlib-compressed JSON STRING, not a plain list -- confirmed against a
+real device (a live-deployment bug report, not the reference, which itself
+never actually decodes this field beyond client.py::decode_records_payload/
+extract_record_list's *existence* as a helper). The string form is decoded
+the same way: base64-decode, zlib-decompress, json.loads. Both forms (plain
+list -- other firmware/response variants, and this library's own mocked
+tests -- and the compressed string) are supported; malformed payloads decode
+to an empty list rather than raising, matching decode_records_payload's own
+broad except clause.
 """
+
+import base64
+import json
+import zlib
 
 import httpx
 import pytest
@@ -20,6 +35,11 @@ import respx
 from ezviz.camera import Camera
 from ezviz.models import Device
 from ezviz.transport.http import EzvizHttp
+
+
+def _compressed_records_blob(items: list[dict]) -> str:
+    raw = zlib.compress(json.dumps(items).encode("utf-8"))
+    return base64.b64encode(raw).decode("ascii")
 
 
 @pytest.mark.asyncio
@@ -45,3 +65,39 @@ async def test_records_returns_time_ranges_from_streaming_v2_endpoint():
         assert sent["stopTime"] == "2026-07-20T23:59:59Z"
     assert recs and recs[0].start_ms == 1700000000000 and recs[0].stop_ms == 1700000060000
     assert recs[0].type == 1
+
+
+@pytest.mark.asyncio
+async def test_records_decodes_base64_zlib_compressed_string_payload():
+    blob = _compressed_records_blob(
+        [{"begin": 1700000000000, "end": 1700000060000, "type": 1}]
+    )
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.get("https://apiieu.ezvizlife.com/v3/streaming/v2/records").mock(
+                return_value=httpx.Response(
+                    200, json={"meta": {"code": 200}, "records": blob}
+                )
+            )
+            recs = await Camera(Device("AA1", "Front", True, "IPC"), http=http).records(
+                date="2026-07-20"
+            )
+    assert recs and recs[0].start_ms == 1700000000000 and recs[0].stop_ms == 1700000060000
+    assert recs[0].type == 1
+
+
+@pytest.mark.asyncio
+async def test_records_returns_empty_list_on_malformed_compressed_payload():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.get("https://apiieu.ezvizlife.com/v3/streaming/v2/records").mock(
+                return_value=httpx.Response(
+                    200, json={"meta": {"code": 200}, "records": "not-a-valid-payload!!"}
+                )
+            )
+            recs = await Camera(Device("AA1", "Front", True, "IPC"), http=http).records(
+                date="2026-07-20"
+            )
+    assert recs == []

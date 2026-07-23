@@ -11,6 +11,9 @@ seek/scrub into past recordings.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import zlib
 from collections.abc import AsyncGenerator
 from contextlib import aclosing, suppress
 from pathlib import Path
@@ -92,6 +95,32 @@ def _first_image_url(value: Any) -> str | None:
             if found:
                 return found
     return None
+
+
+def _decode_records(value: Any) -> list[Any]:
+    """Normalize a ``/v3/streaming/v2/records`` response's ``records`` field.
+
+    Reference: client.py::decode_records_payload -- on some firmware/response
+    variants, ``records`` is not a plain list but a base64+zlib-compressed
+    JSON string (confirmed against a real camera, not just the reference: a
+    live-deployment bug report showed a ~700-char string like ``"eJy..."``,
+    where ``eJy`` is the base64 encoding of the zlib header ``78 9c``).
+    Already-list values pass through unchanged, for other firmware/response
+    variants that DO return a plain list. Malformed payloads decode to an
+    empty list rather than raising, matching the reference's own broad
+    ``except (ValueError, zlib.error, UnicodeDecodeError, JSONDecodeError)``.
+    """
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str):
+        return []
+    try:
+        raw = base64.b64decode(value, validate=True)
+        decoded = zlib.decompress(raw).decode("utf-8").strip()
+        parsed = json.loads(decoded)
+    except (ValueError, zlib.error, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 # quality -> (receiver_stream_type, receiver_new_stream_type); see
 # protocol/local_sdk.py's module docstring for what these select.
@@ -271,6 +300,11 @@ class Camera:
         order, which tries ``records`` first). The single-``date`` convenience
         (vs. an explicit start/stop window) is this library's own addition -- the
         reference always takes a caller-supplied start/stop range.
+
+        On a real camera, ``records`` is not always a plain list -- some
+        firmware/response variants return a base64+zlib-compressed JSON
+        string instead (confirmed against a real device; see
+        ``_decode_records``'s docstring for the reference this ports).
         """
         assert self._http is not None
         data = await self._http.get_json(
@@ -285,7 +319,8 @@ class Camera:
                 "requireLabel": "0",
             },
         )
-        return [Record.from_api(r) for r in (data.get("records") or [])]
+        items = _decode_records(data.get("records"))
+        return [Record.from_api(r) for r in items if isinstance(r, dict)]
 
     def _decrypt_if_encrypted(self, image_data: bytes) -> bytes:
         """Decrypt ``image_data`` with ``media_key`` if it looks like a
