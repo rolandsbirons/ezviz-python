@@ -28,15 +28,16 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     """Validate local-SDK control-frame credentials and open the live stream.
 
     ``operation_code``/``device_key`` are the reference's ``EzvizCasDeviceInfo``
-    tuple, normally obtained via the CAS protocol (out of scope for this
-    milestone -- see ``protocol/local_sdk.py``'s module docstring). Callers
-    must supply them explicitly until CAS is ported.
+    tuple. ``Camera.live()`` normally fills these in automatically via
+    ``Camera.prepare_live()`` (``transport/cas.py``'s CAS client); this
+    validation is the fallback for Cameras used without a client
+    back-reference (manually-supplied creds, or tests).
     """
     if operation_code is None or device_key is None:
         raise AuthError(
-            "live streaming requires operation_code and device_key; the "
-            "reference obtains these via the CAS protocol (not yet ported "
-            "in this library) -- supply them explicitly on the Camera"
+            "live streaming requires operation_code and device_key -- call "
+            "Camera.prepare_live() first (requires a client back-reference), "
+            "or supply them explicitly"
         )
     async for chunk in local_sdk.open_local_sdk_stream(
         host,
