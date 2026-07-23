@@ -63,3 +63,16 @@ class Camera:
         enable_flag = 1 if enable else 0
         suffix = f"/{channel}/{enable_flag}/{kind.value}/switchStatus"
         await self._http.put_device(self.serial, suffix)
+
+    async def siren(self, enable: bool = True) -> None:
+        """Sound or silence the camera's siren.
+
+        Reference: client.py::sound_alarm -- ``PUT /v3/devices/{serial}/0/sendAlarm``
+        with body ``{"enable": "1"/"0"}``. Note the literal ``/0/`` channel
+        segment before ``sendAlarm`` (not ``POST .../sendAlarm`` directly on the
+        serial, as the plan assumed).
+        """
+        assert self._http is not None
+        await self._http.put_device(
+            self.serial, "/0/sendAlarm", {"enable": "1" if enable else "0"}
+        )

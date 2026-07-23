@@ -63,3 +63,13 @@ class Switch(Enum):
     SLEEP = 21
     SOUND = 22
     MOBILE_TRACKING = 25
+
+
+class DefenceMode(Enum):
+    """Account-level (all devices) arm/disarm mode. Values confirmed against
+    pyEzvizApi constants.py::DefenseModeType."""
+
+    UNSET = 0
+    HOME = 1
+    AWAY = 2
+    SLEEP = 3
