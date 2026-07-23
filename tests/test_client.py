@@ -3,6 +3,7 @@ import pytest
 import respx
 
 from ezviz import EzvizClient
+from ezviz.exceptions import AuthError
 
 
 @pytest.mark.asyncio
@@ -16,7 +17,7 @@ async def test_login_then_cameras():
                     "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
                 })
             )
-            respx.get(url__startswith="https://apiieu.ezvizlife.com/v3/userdevices").mock(
+            respx.get("https://apiieu.ezvizlife.com/v3/userdevices/v1/resources/pagelist").mock(
                 return_value=httpx.Response(200, json={
                     "meta": {"code": 200},
                     "deviceInfos": [
@@ -39,3 +40,10 @@ async def test_login_then_cameras():
             cams = await ez.cameras()
     assert set(cams) == {"AA1", "BB2"}
     assert cams["AA1"].online is True and cams["BB2"].online is False
+
+
+@pytest.mark.asyncio
+async def test_cameras_before_login_raises():
+    async with EzvizClient(region="eu") as ez:
+        with pytest.raises(AuthError):
+            await ez.cameras()

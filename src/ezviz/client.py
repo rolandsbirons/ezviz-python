@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from .auth import Session, login
 from .camera import Camera
+from .exceptions import AuthError
 from .models import Device, Region
 from .transport.http import EzvizHttp
 
-DEVICES_PATH = "/v3/userdevices/v1/devices/pagelist"
+DEVICES_PATH = "/v3/userdevices/v1/resources/pagelist"
 
 
 class EzvizClient:
@@ -18,7 +19,9 @@ class EzvizClient:
         self._session = await login(self._http, account, password)
 
     async def cameras(self) -> dict[str, Camera]:
-        payload = await self._http.post_form_or_get(
+        if self._session is None:
+            raise AuthError("not logged in")
+        payload = await self._http.get_json(
             DEVICES_PATH, params={"filter": "CLOUD,TIME_PLAN,STATUS"}
         )
         out: dict[str, Camera] = {}
