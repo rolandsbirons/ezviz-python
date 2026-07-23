@@ -18,3 +18,47 @@ def test_device_from_api_maps_fields():
     assert dev.name == "Front"
     assert dev.online is True
     assert dev.category == "IPC"
+    # New M4.5 fields default sanely when their sibling pagelist blocks
+    # (STATUS/CONNECTION) aren't supplied.
+    assert dev.sub_category == ""
+    assert dev.version == ""
+    assert dev.wan_ip is None
+    assert dev.encrypted is False
+
+
+def test_device_from_api_maps_sub_category_and_version_from_deviceinfos_item():
+    # Reference: camera.py::status() -- self.fetch_key(["deviceInfos",
+    # "deviceSubCategory"]) / ["deviceInfos", "version"] -- both live directly
+    # on the deviceInfos item itself, same as name/status/deviceCategory.
+    payload = {
+        "deviceSerial": "AA1234567",
+        "name": "Front",
+        "status": 1,
+        "deviceCategory": "IPC",
+        "deviceSubCategory": "C6CN",
+        "version": "5.3.0 build 200101",
+    }
+    dev = Device.from_api(payload)
+    assert dev.sub_category == "C6CN"
+    assert dev.version == "5.3.0 build 200101"
+
+
+def test_device_from_api_maps_encrypted_from_status_block():
+    # Reference: camera.py::status() -- bool(self.fetch_key(["STATUS",
+    # "isEncrypt"])) -- STATUS is a sibling pagelist block keyed by serial,
+    # not part of the deviceInfos item.
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(payload, status={"isEncrypt": 1})
+    assert dev.encrypted is True
+    dev_off = Device.from_api(payload, status={"isEncrypt": 0})
+    assert dev_off.encrypted is False
+
+
+def test_device_from_api_maps_wan_ip_from_connection_block():
+    # Reference: camera.py::status() -- wan_ip = conn.get("netIp") or
+    # self.fetch_key(["CONNECTION", "netIp"]) -- CONNECTION is a sibling
+    # pagelist block keyed by serial (same block DeviceEndpoint already
+    # reads localIp/localCmdPort from).
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(payload, connection={"netIp": "203.0.113.9"})
+    assert dev.wan_ip == "203.0.113.9"

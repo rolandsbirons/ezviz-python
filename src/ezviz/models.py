@@ -28,18 +28,50 @@ class Region(Enum):
 
 @dataclass(slots=True, frozen=True)
 class Device:
+    """A discovered camera/device from the pagelist ``deviceInfos`` list.
+
+    ``sub_category``/``version`` live directly on the ``deviceInfos`` item
+    itself (confirmed: camera.py::status() -- ``self.fetch_key(["deviceInfos",
+    "deviceSubCategory"])`` / ``["deviceInfos", "version"]``, same item shape
+    as ``name``/``status``/``deviceCategory``). ``wan_ip``/``encrypted`` live
+    in SIBLING pagelist blocks keyed by device serial, not on the
+    ``deviceInfos`` item -- confirmed: camera.py::status()'s
+    ``wan_ip = conn.get("netIp") or self.fetch_key(["CONNECTION", "netIp"])``
+    and ``bool(self.fetch_key(["STATUS", "isEncrypt"]))`` -- so
+    :meth:`from_api` takes those blocks as separate optional args (see
+    ``EzvizClient.cameras()``, which now requests ``CONNECTION`` alongside
+    the existing ``STATUS`` filter to supply them).
+    """
+
     serial: str
     name: str
     online: bool
     category: str
+    sub_category: str = ""
+    version: str = ""
+    wan_ip: str | None = None
+    encrypted: bool = False
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> Device:
+    def from_api(
+        cls,
+        data: dict[str, Any],
+        *,
+        status: dict[str, Any] | None = None,
+        connection: dict[str, Any] | None = None,
+    ) -> Device:
+        status = status or {}
+        connection = connection or {}
+        net_ip = connection.get("netIp")
         return cls(
             serial=str(data["deviceSerial"]),
             name=str(data.get("name", "")),
             online=int(data.get("status", 0)) == 1,
             category=str(data.get("deviceCategory", "")),
+            sub_category=str(data.get("deviceSubCategory", "")),
+            version=str(data.get("version", "")),
+            wan_ip=str(net_ip) if isinstance(net_ip, str) and net_ip else None,
+            encrypted=bool(status.get("isEncrypt", False)),
         )
 
 

@@ -148,6 +148,13 @@ class Camera:
     def online(self) -> bool:
         return self._device.online
 
+    @property
+    def device(self) -> Device:
+        """The full underlying discovery record (category, sub_category,
+        version, wan_ip, encrypted, ...) -- ``serial``/``name``/``online``
+        above are just convenience shortcuts onto this."""
+        return self._device
+
     def __repr__(self) -> str:
         return f"Camera(serial={self.serial!r}, name={self.name!r}, online={self.online})"
 

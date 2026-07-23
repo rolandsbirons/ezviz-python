@@ -40,14 +40,30 @@ class EzvizClient:
         self._session = await login(self._http, account, password)
 
     async def cameras(self) -> dict[str, Camera]:
+        """Discover cameras on the account.
+
+        Reference filter mirrors client.py::_get_page_list's broad-filter
+        single-call pattern (not a per-device fetch): ``CONNECTION`` was
+        added to the filter (alongside the pre-existing ``CLOUD,TIME_PLAN,
+        STATUS``) so ``Device.wan_ip`` (``CONNECTION[serial].netIp``,
+        confirmed via camera.py::status()) can be populated from the SAME
+        request, without an extra per-camera round trip.
+        """
         if self._session is None:
             raise AuthError("not logged in")
         payload = await self._http.get_json(
-            DEVICES_PATH, params={"filter": "CLOUD,TIME_PLAN,STATUS"}
+            DEVICES_PATH, params={"filter": "CLOUD,TIME_PLAN,STATUS,CONNECTION"}
         )
+        status_block = payload.get("STATUS") or {}
+        connection_block = payload.get("CONNECTION") or {}
         out: dict[str, Camera] = {}
         for info in payload.get("deviceInfos", []) or []:
-            dev = Device.from_api(info)
+            serial = str(info.get("deviceSerial", ""))
+            dev = Device.from_api(
+                info,
+                status=status_block.get(serial),
+                connection=connection_block.get(serial),
+            )
             out[dev.serial] = Camera(dev, http=self._http, client=self)
         return out
 
