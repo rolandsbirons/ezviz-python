@@ -41,12 +41,15 @@ class Device:
     camera.py::status()'s ``wan_ip = conn.get("netIp") or
     self.fetch_key(["CONNECTION", "netIp"])``, ``bool(self.fetch_key(
     ["STATUS", "isEncrypt"]))``, and ``local_ip``'s own fallback chain
-    (``_local_ip()``, which prefers ``WIFI.address`` then falls back to
-    ``CONNECTION.localIp`` -- ``cameras()`` doesn't fetch WIFI, so this
-    reads ``CONNECTION.localIp`` directly, the same field
-    ``DeviceEndpoint.from_connection`` already reads for the local-SDK live
-    path) -- so :meth:`from_api` takes those blocks as separate optional
-    args (see ``EzvizClient.cameras()``, which requests ``CONNECTION``
+    (``_local_ip()``, which prefers ``WIFI.address`` -- when set and not
+    ``"0.0.0.0"`` -- then falls back to ``CONNECTION.localIp``). The WIFI
+    preference matters in practice, not just on paper: some fixed-lens
+    cameras (e.g. the C3X) report an empty ``CONNECTION.localIp`` and only
+    publish their LAN address via ``WIFI.address`` -- confirmed against a
+    real device (a live-deployment bug report: inventory showed
+    ``local_ip=None`` for exactly this camera). :meth:`from_api` takes
+    ``status``/``connection``/``wifi`` as separate optional args (see
+    ``EzvizClient.cameras()``, which requests ``CONNECTION``+``WIFI``
     alongside the existing ``STATUS`` filter to supply them).
     """
 
@@ -68,11 +71,21 @@ class Device:
         *,
         status: dict[str, Any] | None = None,
         connection: dict[str, Any] | None = None,
+        wifi: dict[str, Any] | None = None,
     ) -> Device:
         status = status or {}
         connection = connection or {}
+        wifi = wifi or {}
         net_ip = connection.get("netIp")
-        local_ip = connection.get("localIp")
+        conn_local_ip = connection.get("localIp")
+        wifi_address = wifi.get("address")
+        local_ip: str | None
+        if isinstance(wifi_address, str) and wifi_address.strip() and wifi_address != "0.0.0.0":
+            local_ip = wifi_address.strip()
+        else:
+            local_ip = (
+                str(conn_local_ip) if isinstance(conn_local_ip, str) and conn_local_ip else None
+            )
         channel_number = data.get("channelNumber")
         channels = channel_number if isinstance(channel_number, int) and channel_number > 0 else 1
         return cls(
@@ -84,7 +97,7 @@ class Device:
             version=str(data.get("version", "")),
             wan_ip=str(net_ip) if isinstance(net_ip, str) and net_ip else None,
             encrypted=bool(status.get("isEncrypt", False)),
-            local_ip=str(local_ip) if isinstance(local_ip, str) and local_ip else None,
+            local_ip=local_ip,
             channels=channels,
         )
 
@@ -225,7 +238,24 @@ class DeviceEndpoint:
     Reference: hcnetsdk.py::HcNetSdkLanEndpoint.from_connection -- built from
     a pagelist ``CONNECTION`` block (fetched via ``EzvizClient.device_
     endpoint``, the SAME ``/v3/userdevices/v1/resources/pagelist`` endpoint
-    as device discovery, just with ``filter=CONNECTION``)."""
+    as device discovery, just with ``filter=CONNECTION,WIFI``). ``cmd_port``/
+    ``stream_port``/``net_ip`` always come from ``CONNECTION``; ``local_ip``
+    prefers an optional ``wifi`` block's ``address`` (when set and not
+    ``"0.0.0.0"``) over ``CONNECTION.localIp`` -- confirmed against a real
+    device (a live-deployment bug report): fixed-lens cameras (e.g. the C3X)
+    report an empty ``CONNECTION.localIp`` and only publish their LAN
+    address via ``WIFI.address``, so live streaming broke on them before
+    this fix (``from_connection`` used to unconditionally raise). NOTE: the
+    reference's own local-SDK-stream endpoint resolution
+    (``HcNetSdkLanEndpoint.from_connection``, ``local_stream.py::
+    _local_sdk_endpoint_from_client``) does NOT have this WIFI fallback --
+    it's CONNECTION-only and would raise on a C3X too. This applies the
+    SAME WIFI-preference the reference itself already uses for the
+    equivalent inventory-display concept (camera.py::status()'s
+    ``_local_ip()``) to this endpoint-resolution path too, since it's the
+    same underlying LAN address -- a deliberate improvement beyond a
+    literal reference port, motivated directly by the real failure.
+    """
 
     local_ip: str
     net_ip: str | None = None
@@ -233,10 +263,21 @@ class DeviceEndpoint:
     stream_port: int | None = None
 
     @classmethod
-    def from_connection(cls, connection: dict[str, Any]) -> DeviceEndpoint:
-        local_ip = connection.get("localIp")
-        if not isinstance(local_ip, str) or not local_ip.strip():
-            raise EzvizError("CONNECTION metadata is missing localIp")
+    def from_connection(
+        cls, connection: dict[str, Any], *, wifi: dict[str, Any] | None = None
+    ) -> DeviceEndpoint:
+        wifi_address = (wifi or {}).get("address")
+        if isinstance(wifi_address, str) and wifi_address.strip() and wifi_address != "0.0.0.0":
+            local_ip: str | None = wifi_address.strip()
+        else:
+            conn_local_ip = connection.get("localIp")
+            local_ip = (
+                conn_local_ip
+                if isinstance(conn_local_ip, str) and conn_local_ip.strip()
+                else None
+            )
+        if local_ip is None:
+            raise EzvizError("CONNECTION/WIFI metadata is missing a usable localIp")
         net_ip = connection.get("netIp")
         cmd_port = connection.get("localCmdPort") or _DEFAULT_CMD_PORT
         stream_port = connection.get("localStreamPort")

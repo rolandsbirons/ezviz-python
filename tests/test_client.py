@@ -64,6 +64,39 @@ async def test_login_then_cameras():
 
 
 @pytest.mark.asyncio
+async def test_cameras_prefers_wifi_address_for_local_ip():
+    # Real-camera bug fix: fixed-lens cams (e.g. C3X) report an empty
+    # CONNECTION.localIp and only publish their LAN address via WIFI.
+    async with EzvizClient(region="eu") as ez:
+        with respx.mock:
+            respx.post("https://apiieu.ezvizlife.com/v3/users/login/v5").mock(
+                return_value=httpx.Response(200, json={
+                    "meta": {"code": 200},
+                    "loginSession": {"sessionId": "S1", "rfSessionId": "R1"},
+                    "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+                })
+            )
+            route = respx.get(
+                "https://apiieu.ezvizlife.com/v3/userdevices/v1/resources/pagelist"
+            ).mock(
+                return_value=httpx.Response(200, json={
+                    "meta": {"code": 200},
+                    "deviceInfos": [
+                        {"deviceSerial": "CC3", "name": "Porch", "status": 1,
+                         "deviceCategory": "IPC", "deviceSubCategory": "C3X"},
+                    ],
+                    "CONNECTION": {"CC3": {"localIp": ""}},
+                    "WIFI": {"CC3": {"address": "192.168.1.77"}},
+                })
+            )
+            await ez.login("user@example.com", "pw")
+            cams = await ez.cameras()
+            sent = route.calls.last.request.url.params
+    assert "WIFI" in sent["filter"]
+    assert cams["CC3"].device.local_ip == "192.168.1.77"
+
+
+@pytest.mark.asyncio
 async def test_cameras_before_login_raises():
     async with EzvizClient(region="eu") as ez:
         with pytest.raises(AuthError):

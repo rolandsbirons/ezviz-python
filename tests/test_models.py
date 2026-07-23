@@ -93,3 +93,40 @@ def test_device_from_api_defaults_channels_to_1_when_absent_or_invalid():
     assert Device.from_api(base).channels == 1
     assert Device.from_api({**base, "channelNumber": 0}).channels == 1
     assert Device.from_api({**base, "channelNumber": "not-a-number"}).channels == 1
+
+
+# --- real-camera bug fix: local_ip must prefer WIFI.address (fixed-lens cams
+# like the C3X report an empty CONNECTION.localIp; their LAN IP is only in
+# WIFI). Reference: camera.py::status()'s _local_ip(), which prefers
+# WIFI.address (when set and != "0.0.0.0") over CONNECTION.localIp. ---------
+
+
+def test_device_from_api_prefers_wifi_address_over_connection_local_ip():
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(
+        payload,
+        connection={"localIp": "192.168.1.50"},
+        wifi={"address": "192.168.1.77"},
+    )
+    assert dev.local_ip == "192.168.1.77"
+
+
+def test_device_from_api_falls_back_to_connection_when_wifi_address_missing():
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(payload, connection={"localIp": "192.168.1.50"}, wifi={})
+    assert dev.local_ip == "192.168.1.50"
+
+
+def test_device_from_api_falls_back_to_connection_when_wifi_address_is_unset_sentinel():
+    # C3X-shaped real payload: CONNECTION.localIp is empty, WIFI.address is
+    # the real LAN IP -- the case that broke in the live deployment.
+    payload = {"deviceSerial": "AA1234567", "name": "Front", "status": 1}
+    dev = Device.from_api(
+        payload, connection={"localIp": ""}, wifi={"address": "0.0.0.0"}
+    )
+    assert dev.local_ip is None  # neither side had a usable value
+
+    dev2 = Device.from_api(
+        payload, connection={"localIp": "192.168.1.50"}, wifi={"address": "0.0.0.0"}
+    )
+    assert dev2.local_ip == "192.168.1.50"

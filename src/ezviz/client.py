@@ -43,22 +43,27 @@ class EzvizClient:
         """Discover cameras on the account.
 
         Reference filter mirrors client.py::_get_page_list's broad-filter
-        single-call pattern (not a per-device fetch): ``CONNECTION`` was
-        added to the filter (alongside the pre-existing ``CLOUD,TIME_PLAN,
-        STATUS``) so ``Device.wan_ip``/``local_ip`` (``CONNECTION[serial]
-        .netIp``/``.localIp``, confirmed via camera.py::status()) can be
-        populated from the SAME request, without an extra per-camera round
-        trip. ``Device.channels`` (``deviceInfos.channelNumber``) needs no
-        filter change -- it's on the same ``deviceInfos`` item already
-        fetched via ``CLOUD``.
+        single-call pattern (not a per-device fetch): ``CONNECTION`` and
+        ``WIFI`` were added to the filter (alongside the pre-existing
+        ``CLOUD,TIME_PLAN,STATUS``) so ``Device.wan_ip``/``local_ip``
+        (``CONNECTION[serial].netIp``/``.localIp``, ``WIFI[serial].address``,
+        confirmed via camera.py::status()) can be populated from the SAME
+        request, without an extra per-camera round trip. ``WIFI`` is needed
+        for real: some fixed-lens cameras (e.g. the C3X) report an empty
+        ``CONNECTION.localIp`` and only publish their LAN address via
+        ``WIFI.address`` (confirmed against a real device -- a live-
+        deployment bug report). ``Device.channels`` (``deviceInfos.
+        channelNumber``) needs no filter change -- it's on the same
+        ``deviceInfos`` item already fetched via ``CLOUD``.
         """
         if self._session is None:
             raise AuthError("not logged in")
         payload = await self._http.get_json(
-            DEVICES_PATH, params={"filter": "CLOUD,TIME_PLAN,STATUS,CONNECTION"}
+            DEVICES_PATH, params={"filter": "CLOUD,TIME_PLAN,STATUS,CONNECTION,WIFI"}
         )
         status_block = payload.get("STATUS") or {}
         connection_block = payload.get("CONNECTION") or {}
+        wifi_block = payload.get("WIFI") or {}
         out: dict[str, Camera] = {}
         for info in payload.get("deviceInfos", []) or []:
             serial = str(info.get("deviceSerial", ""))
@@ -66,6 +71,7 @@ class EzvizClient:
                 info,
                 status=status_block.get(serial),
                 connection=connection_block.get(serial),
+                wifi=wifi_block.get(serial),
             )
             out[dev.serial] = Camera(dev, http=self._http, client=self)
         return out
@@ -112,16 +118,22 @@ class EzvizClient:
 
         Reference: client.py::get_device_infos -- confirmed (not guessed) to
         reuse the SAME pagelist endpoint as ``cameras()`` above, requested
-        with ``filter=CONNECTION`` (plus the pagelist's usual groupId/limit/
-        offset). Response top-level key ``CONNECTION`` is itself keyed by
-        device serial.
+        with ``filter=CONNECTION,WIFI`` (plus the pagelist's usual groupId/
+        limit/offset). Response top-level keys ``CONNECTION``/``WIFI`` are
+        each keyed by device serial. ``WIFI`` was added for real: some
+        fixed-lens cameras (e.g. the C3X) report an empty
+        ``CONNECTION.localIp`` and only publish their LAN address via
+        ``WIFI.address`` -- confirmed against a real device (a live-
+        deployment bug report: live streaming broke on this camera). See
+        ``DeviceEndpoint.from_connection``'s docstring for the WIFI-
+        preference itself.
         """
         if self._session is None:
             raise AuthError("not logged in")
         payload = await self._http.get_json(
             DEVICES_PATH,
             params={
-                "filter": "CONNECTION",
+                "filter": "CONNECTION,WIFI",
                 "groupId": _PAGELIST_GROUP_ID,
                 "limit": _PAGELIST_LIMIT,
                 "offset": _PAGELIST_OFFSET,
@@ -130,7 +142,8 @@ class EzvizClient:
         connection = (payload.get("CONNECTION") or {}).get(serial)
         if not connection:
             raise EzvizError(f"device {serial} has no CONNECTION data")
-        return DeviceEndpoint.from_connection(connection)
+        wifi = (payload.get("WIFI") or {}).get(serial)
+        return DeviceEndpoint.from_connection(connection, wifi=wifi)
 
     async def switch_states(self, serial: str) -> dict[int, bool]:
         """Look up a device's switch on/off states.
