@@ -17,7 +17,7 @@ class Region(Enum):
         return self.value
 
     @classmethod
-    def from_str(cls, value: str) -> "Region":
+    def from_str(cls, value: str) -> Region:
         try:
             return cls[value.strip().upper()]
         except KeyError as exc:
@@ -32,7 +32,7 @@ class Device:
     category: str
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Device":
+    def from_api(cls, data: dict[str, Any]) -> Device:
         return cls(
             serial=str(data["deviceSerial"]),
             name=str(data.get("name", "")),

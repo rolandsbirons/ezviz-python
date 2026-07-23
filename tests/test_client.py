@@ -1,0 +1,41 @@
+import httpx
+import pytest
+import respx
+
+from ezviz import EzvizClient
+
+
+@pytest.mark.asyncio
+async def test_login_then_cameras():
+    async with EzvizClient(region="eu") as ez:
+        with respx.mock:
+            respx.post("https://apiieu.ezvizlife.com/v3/users/login/v5").mock(
+                return_value=httpx.Response(200, json={
+                    "meta": {"code": 200},
+                    "loginSession": {"sessionId": "S1", "rfSessionId": "R1"},
+                    "loginArea": {"apiDomain": "apiieu.ezvizlife.com"},
+                })
+            )
+            respx.get(url__startswith="https://apiieu.ezvizlife.com/v3/userdevices").mock(
+                return_value=httpx.Response(200, json={
+                    "meta": {"code": 200},
+                    "deviceInfos": [
+                        {
+                            "deviceSerial": "AA1",
+                            "name": "Front",
+                            "status": 1,
+                            "deviceCategory": "IPC",
+                        },
+                        {
+                            "deviceSerial": "BB2",
+                            "name": "Yard",
+                            "status": 0,
+                            "deviceCategory": "IPC",
+                        },
+                    ],
+                })
+            )
+            await ez.login("user@example.com", "pw")
+            cams = await ez.cameras()
+    assert set(cams) == {"AA1", "BB2"}
+    assert cams["AA1"].online is True and cams["BB2"].online is False
