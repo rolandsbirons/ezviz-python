@@ -8,6 +8,7 @@ lower-level ``protocol.local_sdk`` layer treats as required (non-Optional).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 from ..exceptions import AuthError
 from ..protocol import local_sdk
@@ -40,16 +41,22 @@ async def open_local_sdk_stream(  # noqa: PLR0913
             "Camera.prepare_live() first (requires a client back-reference), "
             "or supply them explicitly"
         )
-    async for chunk in local_sdk.open_local_sdk_stream(
-        host,
-        operation_code=operation_code,
-        device_key=device_key,
-        channel=channel,
-        media_key=media_key,
-        receiver_stream_type=receiver_stream_type,
-        receiver_new_stream_type=receiver_new_stream_type,
-        command_port=command_port,
-        stream_port=stream_port,
-        receiver_port=receiver_port,
-    ):
-        yield chunk
+    # aclosing() so a GeneratorExit from the caller propagates into the
+    # protocol generator's socket cleanup deterministically (see the same
+    # note in Camera.live()).
+    async with aclosing(
+        local_sdk.open_local_sdk_stream(
+            host,
+            operation_code=operation_code,
+            device_key=device_key,
+            channel=channel,
+            media_key=media_key,
+            receiver_stream_type=receiver_stream_type,
+            receiver_new_stream_type=receiver_new_stream_type,
+            command_port=command_port,
+            stream_port=stream_port,
+            receiver_port=receiver_port,
+        )
+    ) as stream:
+        async for chunk in stream:
+            yield chunk

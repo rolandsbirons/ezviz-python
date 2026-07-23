@@ -577,17 +577,25 @@ class Camera:
         if receiver_port is not None:
             kwargs["receiver_port"] = receiver_port
 
-        async for chunk in _live.open_local_sdk_stream(
-            host=self.local_ip,
-            operation_code=self.operation_code,
-            device_key=self.device_key,
-            channel=channel,
-            media_key=self.media_key,
-            receiver_stream_type=stream_type,
-            receiver_new_stream_type=new_stream_type,
-            **kwargs,
-        ):
-            yield chunk
+        # aclosing() so that when THIS generator is closed (e.g. the caller
+        # cancels the live stream), GeneratorExit deterministically propagates
+        # into the inner stream generator's cleanup -- otherwise its local-SDK
+        # sockets leak in CLOSE_WAIT/ESTAB until GC (async-for alone does not
+        # close the generator it iterates).
+        async with aclosing(
+            _live.open_local_sdk_stream(
+                host=self.local_ip,
+                operation_code=self.operation_code,
+                device_key=self.device_key,
+                channel=channel,
+                media_key=self.media_key,
+                receiver_stream_type=stream_type,
+                receiver_new_stream_type=new_stream_type,
+                **kwargs,
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def download(
         self,
