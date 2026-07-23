@@ -4,6 +4,7 @@ from __future__ import annotations
 from .auth import Session, login
 from .camera import Camera
 from .exceptions import AuthError, EzvizError
+from .feature_code import feature_code
 from .models import DefenceMode, Device, DeviceEndpoint, Region
 from .transport.cas import CasClient, CasCredentials
 from .transport.http import EzvizHttp
@@ -27,11 +28,6 @@ _PAGELIST_OFFSET = "0"
 # pipe-delimited string, at these fixed indices.
 _CAS_SYS_CONF_HOST_INDEX = 15
 _CAS_SYS_CONF_PORT_INDEX = 16
-# Placeholder hardware/feature code sent as the CAS request's <Sign> field
-# (reference: EzvizCAS._hardware_code, which defaults to a MAC-derived
-# per-install FEATURE_CODE). Matches auth.py's login featureCode placeholder
-# for consistency; a real per-install code is still a follow-up item.
-_CAS_HARDWARE_CODE = "ezviz-python"
 
 
 class EzvizClient:
@@ -60,6 +56,12 @@ class EzvizClient:
 
         Reference wiring: local_stream.py::get_local_sdk_stream_credentials_
         from_client -- ``EzvizCAS(client.export_token()).cas_get_encryption(serial)``.
+        The CAS request's ``<Sign>`` is the same generated ``feature_code()``
+        sent as login's ``featureCode`` -- confirmed by reading
+        ``EzvizCAS._hardware_code``'s fallback chain, which reads
+        ``token["feature_code"]`` (set by ``client.py::_login`` to the same
+        ``FEATURE_CODE`` used in its own login payload) before falling back
+        to the module-level constant. Both call sites resolve to one value.
         """
         if self._session is None:
             raise AuthError("not logged in")
@@ -68,7 +70,7 @@ class EzvizClient:
             host=host,
             port=port,
             session_id=self._session.session_id,
-            hardware_code=_CAS_HARDWARE_CODE,
+            hardware_code=feature_code(),
         )
         return await cas_client.get_device_credentials(serial)
 

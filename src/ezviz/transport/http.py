@@ -50,7 +50,12 @@ class EzvizHttp:
         it's for callers (like login) that need to branch on specific API codes
         themselves (e.g. region-redirect/MFA) rather than treat them as errors.
         """
-        resp = await self._client.post(path, data=data, headers=self._session_headers())
+        # follow_redirects=False matches the reference (requests' allow_redirects=
+        # False in client.py::_login) -- httpx already defaults to this, but it's
+        # made explicit here since login's behavior depends on it.
+        resp = await self._client.post(
+            path, data=data, headers=self._session_headers(), follow_redirects=False
+        )
         resp.raise_for_status()
         payload: dict[str, Any] = resp.json()
         return payload

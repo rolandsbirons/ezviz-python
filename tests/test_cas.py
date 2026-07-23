@@ -18,9 +18,14 @@ whole token structure.
 
 import asyncio
 
+import httpx
 import pytest
+import respx
 
+import ezviz.client as client_module
+from ezviz.auth import Session
 from ezviz.exceptions import ProtocolError
+from ezviz.feature_code import feature_code
 from ezviz.transport.cas import (
     CAS_COMMAND_GET_OPERATION_CODE,
     CAS_FRAME_HEADER_SIZE,
@@ -210,3 +215,43 @@ async def test_cas_client_connect_failure_raises_protocol_error():
     )
     with pytest.raises(ProtocolError):
         await client.get_device_credentials("AA1")
+
+
+# --- EzvizClient.cas_credentials() wiring -----------------------------------
+#
+# Confirmed by reading cas.py::EzvizCAS._hardware_code's fallback chain
+# (token["hardware_code"] or token["feature_code"] or token["featureCode"] or
+# FEATURE_CODE) together with client.py::_login (which stores
+# token["feature_code"] = FEATURE_CODE, the SAME constant used in its own
+# login payload's featureCode field): the CAS request's <Sign> is the
+# identical generated feature code sent at login, not a separate value.
+
+
+@pytest.mark.asyncio
+async def test_cas_credentials_uses_the_shared_feature_code(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeCasClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def get_device_credentials(self, serial: str) -> object:
+            return object()
+
+    monkeypatch.setattr(client_module, "CasClient", _FakeCasClient)
+
+    ez = client_module.EzvizClient(region="eu")
+    ez._session = Session(session_id="S1", refresh_id="R1", domain="apiieu.ezvizlife.com")
+    with respx.mock:
+        respx.get("https://apiieu.ezvizlife.com/v3/configurations/system/info").mock(
+            return_value=httpx.Response(200, json={
+                "meta": {"code": 200},
+                "systemConfigInfo": {"sysConf": "|".join(["x"] * 15 + ["cas.example.com", "8666"])},
+            })
+        )
+        await ez.cas_credentials("AA1")
+
+    assert captured["hardware_code"] == feature_code()
+    assert captured["session_id"] == "S1"
+    assert captured["host"] == "cas.example.com"
+    assert captured["port"] == 8666
