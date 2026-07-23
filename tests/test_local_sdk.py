@@ -205,6 +205,33 @@ def _rtp_packet(inner: bytes) -> bytes:
     return bytes([0x80, 0x60, 0x00, 0x01]) + b"\x00" * 8 + inner
 
 
+# Minimal-but-structurally-real MPEG-PS bytes (this project's own test data,
+# not copied from the reference) -- see test_media.py's fixture comment for
+# why the local-SDK stream must be treated as MPEG-PS, not raw Annex-B.
+_ANNEX_B_START = b"\x00\x00\x00\x01"
+_HEVC_NAL_HEADER = b"\x26\x01"
+
+
+def _pack_header() -> bytes:
+    return b"\x00\x00\x01\xba" + bytes(
+        [0x44, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0xF8]
+    )
+
+
+def _pes_video_packet(payload: bytes) -> bytes:
+    packet_length = 3 + len(payload)
+    return b"\x00\x00\x01\xe0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
+
+
+def _pes_audio_packet(payload: bytes = b"\x00") -> bytes:
+    packet_length = 3 + len(payload)
+    return b"\x00\x00\x01\xc0" + packet_length.to_bytes(2, "big") + b"\x80\x00\x00" + payload
+
+
+def _mpeg_ps_video_unit(nal_bytes: bytes) -> bytes:
+    return _pack_header() + _pes_video_packet(nal_bytes)
+
+
 @pytest.mark.asyncio
 async def test_open_local_sdk_stream_negotiates_and_yields_media():
     async def command_handler(
@@ -245,8 +272,18 @@ async def test_open_local_sdk_stream_negotiates_and_yields_media():
         writer.write(_plain_response_frame(command=STREAM_SETUP_RESPONSE, body=response_body))
         # Arbitrary binary preface before the first "$" frame, per the reference.
         writer.write(b"\xab\xcd\xef")
-        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + b"PSFRAME1")))
-        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x00" + b"PSFRAME2")))
+        # Two MPEG-PS "units" (pack header + video PES), each carrying one
+        # NAL, split across two local-SDK/RTP packets -- exercising the
+        # assembler's cross-packet buffering. Nothing is releasable until the
+        # trailing audio PES packet proves the video run is complete (see
+        # mpeg_ps.decryptable_prefix_length), so both NALs come out together
+        # in a single yielded chunk once that arrives.
+        nal1 = _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMEONEDATA"
+        nal2 = _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMETWODATA"
+        unit1 = _mpeg_ps_video_unit(nal1)
+        unit2 = _mpeg_ps_video_unit(nal2) + _pes_audio_packet()
+        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + unit1)))
+        writer.write(_rtp_frame(0, _rtp_packet(b"\x1c\x80" + unit2)))
         await writer.drain()
         # Keep the connection open until the test closes it (real cameras
         # stream continuously); avoid closing early to prevent a race with
@@ -269,10 +306,12 @@ async def test_open_local_sdk_stream_negotiates_and_yields_media():
             connect_timeout=5.0,
         )
         first = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
-        second = await asyncio.wait_for(gen.__anext__(), timeout=5.0)
         await gen.aclose()
-        assert first == b"PSFRAME1"
-        assert second == b"PSFRAME2"
+        assert first.startswith(_ANNEX_B_START)
+        assert first == (
+            _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMEONEDATA"
+            + _ANNEX_B_START + _HEVC_NAL_HEADER + b"FRAMETWODATA"
+        )
     finally:
         command_server.close()
         stream_server.close()

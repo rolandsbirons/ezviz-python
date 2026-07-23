@@ -20,10 +20,16 @@ of the 16/17 sequence numbers and the 10101 receiver-port default).
 Scope note: this module needs the per-device local-control AES key
 ("device_key", 16 bytes) and "operation_code" that the reference obtains via
 a *separate* CAS TLS protocol (``EzvizCAS.cas_get_encryption`` in
-``cas.py``, ~577 lines of its own binary framing). Porting CAS is out of
-scope for this milestone (it's a distinct cloud protocol, not the LAN
-local-SDK one) -- callers must supply ``device_key``/``operation_code``
-however they obtain them.
+``cas.py``). ``transport/cas.py`` now ports that protocol and
+``Camera.prepare_live()`` wires it in automatically; this module still
+accepts them as plain parameters so it stays testable without any cloud
+dependency.
+
+Media framing/decryption: every media chunk (whether the camera encrypts or
+not) is routed through ``crypto.media.StreamDecryptor``, which de-frames the
+MPEG-PS-wrapped local-SDK stream into clean Annex-B NAL bytes (and decrypts
+AES-ECB-encrypted NAL prefixes when a ``media_key`` is given) -- see that
+class's docstring.
 """
 from __future__ import annotations
 
@@ -382,7 +388,9 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     connect_timeout: float = 10.0,
     max_prefix_bytes: int = 4096,
 ) -> AsyncIterator[bytes]:
-    """Connect, bootstrap preview + stream setup, and yield MPEG-PS media chunks.
+    """Connect, bootstrap preview + stream setup, and yield clean Annex-B
+    H.265/H.264 NAL byte chunks (de-framed from the camera's MPEG-PS-wrapped
+    media stream -- see ``StreamDecryptor``).
 
     Mirrors ``EzvizLocalSdkClient.bootstrap_preview_from_fields`` +
     ``EzvizLocalSdkMediaStream.iter_packets``: preview (``0x2011``) goes over
@@ -391,7 +399,10 @@ async def open_local_sdk_stream(  # noqa: PLR0913
     (16/17) and the 10101 receiver port match the reference's top-level
     ``open_local_sdk_stream_from_client`` entry point defaults.
     """
-    decryptor = StreamDecryptor(media_key) if media_key is not None else None
+    # Always de-frames MPEG-PS -> Annex-B (see StreamDecryptor's docstring);
+    # decryption only runs when media_key is given, but every camera's
+    # stream needs the de-framing step regardless of encryption.
+    assembler = StreamDecryptor(media_key)
 
     async with (
         DeviceLink(
@@ -452,4 +463,6 @@ async def open_local_sdk_stream(  # noqa: PLR0913
                 stream_link, max_prefix_bytes=max_prefix_bytes
             )
             chunk = strip_local_fragment_header(rtp_payload(payload))
-            yield decryptor.update(chunk) if decryptor is not None else chunk
+            out = assembler.update(chunk)
+            if out:
+                yield out
