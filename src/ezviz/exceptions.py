@@ -28,3 +28,7 @@ class DeviceOffline(EzvizError):
 
 class CryptoError(EzvizError):
     """Decryption/crypto failure."""
+
+
+class ProtocolError(EzvizError):
+    """A binary wire protocol (CAS, local-SDK, ...) violated its contract."""
