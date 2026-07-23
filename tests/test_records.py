@@ -22,6 +22,13 @@ list -- other firmware/response variants, and this library's own mocked
 tests -- and the compressed string) are supported; malformed payloads decode
 to an empty list rather than raising, matching decode_records_payload's own
 broad except clause.
+
+NOTE on a SECOND real-camera bug fix: a real camera's decoded record item
+keys are B/E/Type/Res/Res2, and B/E are ISO-8601 datetime STRINGS (e.g.
+"2026-07-23T00:00:00"), not epoch-ms ints -- confirmed against a real
+device (a live-deployment bug report). Record.begin/end are therefore
+str-coerced raw values (NOT parsed to int epoch ms) -- see Record's
+docstring in models.py.
 """
 
 import base64
@@ -63,14 +70,19 @@ async def test_records_returns_time_ranges_from_streaming_v2_endpoint():
         assert sent["channelNo"] == "1"
         assert sent["startTime"] == "2026-07-20T00:00:00Z"
         assert sent["stopTime"] == "2026-07-20T23:59:59Z"
-    assert recs and recs[0].start_ms == 1700000000000 and recs[0].stop_ms == 1700000060000
+    # epoch-int firmware variant: begin/end are str-coerced, not parsed.
+    assert recs and recs[0].begin == "1700000000000" and recs[0].end == "1700000060000"
     assert recs[0].type == 1
 
 
 @pytest.mark.asyncio
 async def test_records_decodes_base64_zlib_compressed_string_payload():
+    # Real confirmed shape: B/E are ISO-8601 strings, not epoch ms.
     blob = _compressed_records_blob(
-        [{"begin": 1700000000000, "end": 1700000060000, "type": 1}]
+        [{
+            "B": "2026-07-23T00:00:00", "E": "2026-07-23T00:12:41",
+            "Type": 1, "Res": "", "Res2": "",
+        }]
     )
     async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
         http.set_session("S")
@@ -83,7 +95,9 @@ async def test_records_decodes_base64_zlib_compressed_string_payload():
             recs = await Camera(Device("AA1", "Front", True, "IPC"), http=http).records(
                 date="2026-07-20"
             )
-    assert recs and recs[0].start_ms == 1700000000000 and recs[0].stop_ms == 1700000060000
+    assert recs
+    assert recs[0].begin == "2026-07-23T00:00:00"
+    assert recs[0].end == "2026-07-23T00:12:41"
     assert recs[0].type == 1
 
 

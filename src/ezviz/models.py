@@ -194,6 +194,17 @@ def _first_int(*values: Any) -> int:
     return 0
 
 
+def _first_str(*values: Any) -> str:
+    """Return the first non-empty value, str-coerced (not parsed); else ''."""
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text:
+            return text
+    return ""
+
+
 @dataclass(slots=True, frozen=True)
 class Record:
     """One SD-card recording time-range segment (no download URL -- that's a
@@ -201,20 +212,32 @@ class Record:
     extract_record_list (response's top-level "records" key). Item field
     aliases mirror the defensive multi-key fallback the reference CLI itself
     uses when displaying records (__main__.py::_handle_records), since the
-    exact key used by any given firmware/response variant isn't fixed."""
+    exact key used by any given firmware/response variant isn't fixed.
 
-    start_ms: int
-    stop_ms: int
+    ``begin``/``end`` are the API's RAW segment bounds, str-coerced but
+    otherwise unparsed -- confirmed against a real camera (a live-deployment
+    bug report): the real per-item keys are ``B``/``E``/``Type``/``Res``/
+    ``Res2``, and ``B``/``E`` are ISO-8601 datetime STRINGS (e.g.
+    ``"2026-07-23T00:00:00"``), not epoch-ms ints. Coercing through
+    ``int()`` (the old ``start_ms``/``stop_ms`` fields) silently produced
+    ``0`` for every record. str-coercion instead of parsing keeps this
+    working for BOTH the ISO-string firmware confirmed here and any
+    epoch-int firmware another device/response variant might return --
+    callers that need a real datetime/epoch value parse it themselves.
+    """
+
+    begin: str
+    end: str
     type: int
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> Record:
         return cls(
-            start_ms=_first_int(
-                data.get("begin"), data.get("B"), data.get("startTime"), data.get("startTimeStr")
+            begin=_first_str(
+                data.get("B"), data.get("begin"), data.get("startTime"), data.get("startTimeStr")
             ),
-            stop_ms=_first_int(
-                data.get("end"), data.get("E"), data.get("stopTime"), data.get("stopTimeStr")
+            end=_first_str(
+                data.get("E"), data.get("end"), data.get("stopTime"), data.get("stopTimeStr")
             ),
             type=_first_int(
                 data.get("type"),
