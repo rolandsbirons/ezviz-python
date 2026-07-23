@@ -183,3 +183,35 @@ async def test_night_vision_sets_devconfig_keyvalue():
         sent = route.calls.last.request.content
     assert b"key=NightVision_Model" in sent
     assert b"luminance" in sent and b"graphicType" in sent
+
+
+# --- Task 6: set_sensitivity(value, type=3) -- reference:
+# client.py::detection_sensibility -- a "resultCode" (not "meta") envelope --
+
+
+@pytest.mark.asyncio
+async def test_set_sensitivity_posts_config_algorithm():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.post(
+                "https://apiieu.ezvizlife.com/api/device/configAlgorithm"
+            ).mock(return_value=httpx.Response(200, json={"resultCode": "0"}))
+            await _cam(http).set_sensitivity(5)
+        sent = route.calls.last.request.content
+    assert b"subSerial=AA1" in sent
+    assert b"type=3" in sent
+    assert b"channelNo=1" in sent
+    assert b"value=5" in sent
+
+
+@pytest.mark.asyncio
+async def test_set_sensitivity_raises_on_nonzero_result_code():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            respx.post("https://apiieu.ezvizlife.com/api/device/configAlgorithm").mock(
+                return_value=httpx.Response(200, json={"resultCode": "-1"})
+            )
+            with pytest.raises(EzvizError):
+                await _cam(http).set_sensitivity(5)

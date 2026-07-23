@@ -35,6 +35,9 @@ CAPTURE_PATH_TEMPLATE = "/v3/devconfig/v1/{serial}/{channel}/capture"
 IOT_ACTION_PATH = "/v3/iot-feature/action"
 # Reference: client.py::set_dev_config_kv / API_ENDPOINT_DEVCONFIG_BY_KEY.
 DEVCONFIG_KEY_VALUE_PATH_TEMPLATE = "/v3/devconfig/v1/keyValue/{serial}/{channel}/op"
+# Reference: client.py::detection_sensibility / API_ENDPOINT_DETECTION_SENSIBILITY.
+# NOT device-serial-prefixed; a top-level "resultCode" envelope, not "meta".
+DETECTION_SENSIBILITY_PATH = "/api/device/configAlgorithm"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -351,6 +354,29 @@ class Camera:
         await self._set_config_key(
             "NightVision_Model", f'{{"graphicType":{mode},"luminance":{luminance}}}'
         )
+
+    async def set_sensitivity(self, value: int, *, type: int = 3, channel: int = 1) -> None:
+        """Set motion-detection sensitivity.
+
+        Reference: client.py::detection_sensibility -- ``POST
+        /api/device/configAlgorithm`` (NOT device-serial-path-prefixed) with
+        form data ``subSerial``/``type``/``channelNo``/``value``. Response
+        uses a top-level ``resultCode`` envelope (``"0"`` for success), not
+        the usual ``{"meta": {"code": ...}}`` shape -- so this uses
+        ``post_raw`` and checks ``resultCode`` itself.
+        """
+        assert self._http is not None
+        payload = await self._http.post_raw(
+            DETECTION_SENSIBILITY_PATH,
+            {
+                "subSerial": self.serial,
+                "type": str(type),
+                "channelNo": str(channel),
+                "value": str(value),
+            },
+        )
+        if str(payload.get("resultCode")) != "0":
+            raise EzvizError(f"could not set detection sensibility: {payload}")
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
