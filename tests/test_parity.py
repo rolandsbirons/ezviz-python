@@ -165,3 +165,21 @@ async def test_switch_states_reads_switch_pagelist_filter():
         sent = route.calls.last.request.url.params
     assert sent["filter"] == "SWITCH"
     assert states == {1: True, 3: False}
+
+
+# --- Task 5: night_vision(mode) -- reference: client.py::set_night_vision_mode
+# (-> set_device_config_by_key -> set_dev_config_kv) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_night_vision_sets_devconfig_keyvalue():
+    async with EzvizHttp(domain="apiieu.ezvizlife.com") as http:
+        http.set_session("S")
+        with respx.mock:
+            route = respx.put(
+                "https://apiieu.ezvizlife.com/v3/devconfig/v1/keyValue/AA1/1/op"
+            ).mock(return_value=httpx.Response(200, json={"meta": {"code": 200}}))
+            await _cam(http).night_vision(1)
+        sent = route.calls.last.request.content
+    assert b"key=NightVision_Model" in sent
+    assert b"luminance" in sent and b"graphicType" in sent

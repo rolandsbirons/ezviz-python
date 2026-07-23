@@ -33,6 +33,8 @@ RECORDS_PATH = "/v3/streaming/v2/records"
 CAPTURE_PATH_TEMPLATE = "/v3/devconfig/v1/{serial}/{channel}/capture"
 # Reference: client.py::_iot_request / API_ENDPOINT_IOT_ACTION.
 IOT_ACTION_PATH = "/v3/iot-feature/action"
+# Reference: client.py::set_dev_config_kv / API_ENDPOINT_DEVCONFIG_BY_KEY.
+DEVCONFIG_KEY_VALUE_PATH_TEMPLATE = "/v3/devconfig/v1/keyValue/{serial}/{channel}/op"
 # Known response keys that may carry the captured picture's URL. Reference:
 # client.py::_first_image_url -- the reference itself treats this defensively
 # (the exact key varies by firmware/response variant), so this ports the
@@ -323,6 +325,32 @@ class Camera:
                 "construct it via EzvizClient.cameras()"
             )
         return await self._client.switch_states(self.serial)
+
+    async def _set_config_key(self, key: str, value: str, *, channel: int = 1) -> None:
+        """Set one devconfig key/value pair (``value`` is usually itself a
+        JSON-encoded string, per the reference's own convention).
+
+        Reference: client.py::set_device_config_by_key -> set_dev_config_kv --
+        ``PUT /v3/devconfig/v1/keyValue/{serial}/{channel}/op`` with form
+        data ``{"key": key, "value": value}``.
+        """
+        assert self._http is not None
+        await self._http.put_form(
+            DEVCONFIG_KEY_VALUE_PATH_TEMPLATE.format(serial=self.serial, channel=channel),
+            {"key": key, "value": value},
+        )
+
+    async def night_vision(self, mode: int, *, luminance: int = 100) -> None:
+        """Set the camera's night-vision mode (and luminance, for the
+        color/smart night-vision modes that support it).
+
+        Reference: client.py::set_night_vision_mode -- sets devconfig key
+        ``NightVision_Model`` to the JSON string
+        ``{"graphicType": <mode>, "luminance": <luminance>}``.
+        """
+        await self._set_config_key(
+            "NightVision_Model", f'{{"graphicType":{mode},"luminance":{luminance}}}'
+        )
 
     async def prepare_live(self) -> None:
         """Fetch and cache CAS local-control credentials + the LAN endpoint,
