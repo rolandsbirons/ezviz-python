@@ -6,12 +6,36 @@ from typing import Any
 import httpx
 
 from ..exceptions import EzvizError
+from ..feature_code import feature_code
+
+
+def _default_headers() -> dict[str, str]:
+    """The standard EZVIZ app request headers, required on every call.
+
+    Ported from the reference ``REQUEST_HEADER`` (pyEzvizApi constants) — the API
+    rejects requests (HTTP 400) without ``appId``/``clientType``/``customno`` etc.
+    """
+    return {
+        "featureCode": feature_code(),
+        "clientType": "3",
+        "osVersion": "",
+        "clientVersion": "",
+        "netType": "WIFI",
+        "customno": "1000001",
+        "ssid": "",
+        "clientNo": "web_site",
+        "appId": "ys7",
+        "language": "en_GB",
+        "lang": "en",
+        "User-Agent": "okhttp/3.12.1",
+    }
 
 
 class EzvizHttp:
     """Thin async wrapper over httpx for the EZVIZ cloud REST API.
 
-    Sends the session id header and unwraps the standard ``{"meta": {...}}`` envelope.
+    Sends the standard app headers + session id and unwraps the ``{"meta": {...}}``
+    envelope.
     """
 
     def __init__(self, domain: str, *, timeout: float = 15.0) -> None:
@@ -19,7 +43,7 @@ class EzvizHttp:
         self._session: str | None = None
         self._client = httpx.AsyncClient(
             base_url=f"https://{domain}", timeout=timeout,
-            headers={"User-Agent": "ezviz-python/0.1"},
+            headers=_default_headers(),
         )
 
     @property
