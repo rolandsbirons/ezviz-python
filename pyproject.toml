@@ -9,7 +9,7 @@ description = "Clean async Python library for EZVIZ cameras"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-authors = [{ name = "Rolands Birons" }]
+authors = [{ name = "Rolands Bīrons" }]
 keywords = ["ezviz", "hikvision", "camera", "iot", "async", "h265", "hevc", "streaming"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -30,6 +30,8 @@ dependencies = ["httpx>=0.27", "pycryptodome>=3.20", "cryptography>=42"]
 Homepage = "https://github.com/rolandsbirons/ezviz-python"
 Repository = "https://github.com/rolandsbirons/ezviz-python"
 Issues = "https://github.com/rolandsbirons/ezviz-python/issues"
+Changelog = "https://github.com/rolandsbirons/ezviz-python/blob/main/CHANGELOG.md"
+"EZVIZ Dashboard" = "https://github.com/rolandsbirons/ezviz-dashboard"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "respx>=0.21", "ruff>=0.6", "mypy>=1.11"]
