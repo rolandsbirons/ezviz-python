@@ -1,12 +1,13 @@
 """Camera object — status view + device controls (PTZ, switches, siren, alarms,
 SD records, live H.265 stream, live-to-file download).
 
-Scrub-playback of *past* SD footage is not implemented (open RE item -- the
-reference has HCNetSDK playback *names* but no working local command-port
-playback plan; native-RE ``CreatePlaybackStartReq`` is not reproducible
-without deep further RE). ``records()`` lists SD-card recording segments;
-``download()`` records the *current live* stream to a file -- it does not
-seek/scrub into past recordings.
+``playback()`` (EXPERIMENTAL) streams recorded SD footage via the local-SDK
+playback command reverse-engineered from the app's native libs -- the pre-start
+(``0x2013``) ``RecordInfo StartAt/StopAt`` request over the same socket as live.
+The media path is validated (recorded H.265 decodes cleanly); the pre-start
+auth/field set for exact time-seek is still being finalised against hardware.
+``records()`` lists SD-card recording segments; ``download()`` records the
+*current live* stream to a file.
 """
 from __future__ import annotations
 
@@ -569,7 +570,7 @@ class Camera:
         except KeyError:
             raise EzvizError(f"unknown live stream quality {quality!r}") from None
 
-        kwargs: dict[str, int] = {}
+        kwargs: dict[str, Any] = {}
         if self.cmd_port is not None:
             kwargs["command_port"] = self.cmd_port
         if self.stream_port is not None:
@@ -587,6 +588,64 @@ class Camera:
                 host=self.local_ip,
                 operation_code=self.operation_code,
                 device_key=self.device_key,
+                channel=channel,
+                media_key=self.media_key,
+                receiver_stream_type=stream_type,
+                receiver_new_stream_type=new_stream_type,
+                **kwargs,
+            )
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
+
+    async def playback(
+        self,
+        *,
+        start: str,
+        stop: str,
+        permanent_code: str = "",
+        quality: str = "sub",
+        channel: int = 1,
+        receiver_port: int | None = None,
+    ) -> AsyncGenerator[bytes, None]:
+        """Yield H.265 chunks of RECORDED SD-card footage between ``start`` and
+        ``stop`` (ISO ``%Y-%m-%dT%H:%M:%S`` -- use ``records()``'s ``B``/``E``).
+
+        EXPERIMENTAL: unlike ``live()``, the local playback command was
+        reverse-engineered from the app's native libs (see the project's
+        native-RE notes) -- the ``RecordInfo StartAt/StopAt`` request over the
+        same command socket as live. Field/opcode specifics are being validated
+        against real hardware; ``permanent_code`` and the frame opcode may need
+        tuning per firmware.
+        """
+        from .protocol.local_sdk import open_local_sdk_playback
+
+        if self.local_ip is None:
+            await self.prepare_live()
+        if self.local_ip is None or self.operation_code is None or self.device_key is None:
+            raise EzvizError(f"camera {self.serial} is not prepared for playback")
+        try:
+            stream_type, new_stream_type = _LIVE_QUALITY_STREAM_TYPES[quality]
+        except KeyError:
+            raise EzvizError(f"unknown quality {quality!r}") from None
+
+        kwargs: dict[str, Any] = {}
+        if self.cmd_port is not None:
+            kwargs["command_port"] = self.cmd_port
+        if self.stream_port is not None:
+            kwargs["stream_port"] = self.stream_port
+        if receiver_port is not None:
+            kwargs["receiver_port"] = receiver_port
+
+        async with aclosing(
+            open_local_sdk_playback(
+                host=self.local_ip,
+                operation_code=self.operation_code,
+                device_key=self.device_key,
+                serial=self.serial,
+                permanent_code=permanent_code,
+                start_at=start,
+                stop_at=stop,
                 channel=channel,
                 media_key=self.media_key,
                 receiver_stream_type=stream_type,

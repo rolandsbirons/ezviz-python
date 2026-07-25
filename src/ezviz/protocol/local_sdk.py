@@ -252,6 +252,69 @@ def build_preview_request_xml(  # noqa: PLR0913
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def build_playback_request_xml(  # noqa: PLR0913
+    *,
+    operation_code: str,
+    channel: int,
+    serial: str,
+    permanent_code: str,
+    start_at: str,
+    stop_at: str,
+    receiver_port: int = DEFAULT_RECEIVER_PORT,
+    receiver_stream_type: str = "SUB",
+    receiver_new_stream_type: int = 2,
+    receiver_ex_port: int = DEFAULT_RECEIVER_PORT,
+    is_encrypt: str = "TRUE",
+    auth_ticket: str = "",
+    auth_biz_code: str = "biz=1",
+    auth_interval: int = 180,
+    key: str = "",
+    session_key: str = "",
+) -> bytes:
+    """Build the plaintext XML body for the SD-playback request.
+
+    Recovered from libezstreamclient.so ``CChipParser::CreatePlaybackStartReq``
+    (native-re.md): the same ``<Request>`` envelope as the live preview, plus
+    the playback fields -- ``<Serial>``, ``<PermanentCode>`` and, crucially,
+    ``<RecordInfo StartAt="…" StopAt="…"/>`` carrying the record window
+    (ISO ``%Y-%m-%dT%H:%M:%S`` = exactly ``records()``'s ``B``/``E``).
+    Sent over the command socket like preview; the camera then streams the
+    recorded media on the same IDMX path as ``live()``.
+    """
+    receiver_info = _xml_attrs(
+        (
+            ("Address", ""),
+            ("Port", receiver_port),
+            ("ServerType", 1),
+            ("StreamType", receiver_stream_type),
+            ("NewStreamType", receiver_new_stream_type),
+            ("TransProto", "TCP"),
+        )
+    )
+    receiver_info_ex = _xml_attrs((("SessionID", ""), ("Port", receiver_ex_port)))
+    authentication = _xml_attrs(
+        (("Ticket", auth_ticket), ("BizCode", auth_biz_code), ("Interval", auth_interval))
+    )
+    record_info = _xml_attrs((("StartAt", start_at), ("StopAt", stop_at)))
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<Request>",
+        f"\t<OperationCode>{_xml_escape(operation_code)}</OperationCode>",
+        f"\t<Channel>{channel}</Channel>",
+        f"\t<Serial>{_xml_escape(serial)}</Serial>",
+        f"\t<ReceiverInfo {receiver_info} />",
+        f"\t<IsEncrypt>{_xml_escape(str(is_encrypt))}</IsEncrypt>",
+        f"\t<ReceiverInfoEx {receiver_info_ex} />",
+        f"\t<Authentication {authentication} />",
+        f"\t<RecordInfo {record_info} />",
+        f"\t<PermanentCode>{_xml_escape(permanent_code)}</PermanentCode>",
+        f"\t<Key>{_xml_escape(key)}</Key>",
+        f"\t<SessionKey>{_xml_escape(session_key)}</SessionKey>",
+        "</Request>",
+    ]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def build_stream_setup_request_xml(
     *, session: str, rate: str | int = 1, mode: str | int = -1
 ) -> bytes:
@@ -460,6 +523,134 @@ async def open_local_sdk_stream(  # noqa: PLR0913
         await stream_link.recv_exactly(SSL_TRAILER_LENGTH)
         if stream_setup_header.command != STREAM_SETUP_RESPONSE:
             raise EzvizError("local SDK stream setup returned unexpected command")
+
+        while True:
+            _prefix, _header, payload = await _read_frame_after_prefix(
+                stream_link, max_prefix_bytes=max_prefix_bytes
+            )
+            chunk = strip_local_fragment_header(rtp_payload(payload))
+            out = assembler.update(chunk)
+            if out:
+                yield out
+
+
+async def open_local_sdk_playback(  # noqa: PLR0913
+    host: str,
+    *,
+    operation_code: str,
+    device_key: bytes,
+    serial: str,
+    permanent_code: str,
+    start_at: str,
+    stop_at: str,
+    key: str = "",
+    session_key: str = "",
+    channel: int = 1,
+    command_port: int = DEFAULT_COMMAND_PORT,
+    stream_port: int = DEFAULT_STREAM_PORT,
+    receiver_port: int = DEFAULT_RECEIVER_PORT,
+    receiver_stream_type: str = "SUB",
+    receiver_new_stream_type: int = 2,
+    media_key: str | None = None,
+    playback_command: int = 0x2013,  # PRE_START (playback); preview 0x2011 = live
+    playback_sequence: int = 16,
+    stream_setup_sequence: int = 17,
+    stream_rate: str | int = 1,
+    stream_mode: str | int = -1,
+    connect_timeout: float = 10.0,
+    max_prefix_bytes: int = 4096,
+) -> AsyncGenerator[bytes, None]:
+    """Yield H.265 chunks of a RECORDED (SD-card) segment via local playback.
+
+    The playback analogue of ``open_local_sdk_stream``: sends the recovered
+    playback ``<Request>`` (``build_playback_request_xml`` -- ``RecordInfo
+    StartAt/StopAt``) over the command socket, then reuses the exact same
+    stream-setup + IDMX de-framing as live. ``start_at``/``stop_at`` are ISO
+    ``%Y-%m-%dT%H:%M:%S`` (``records()``'s ``B``/``E``). ``playback_command``
+    defaults to the preview opcode; override while the exact frame opcode is
+    being confirmed empirically against a camera.
+    """
+    assembler = StreamDecryptor(media_key)
+    async with (
+        DeviceLink(
+            host, command_port, timeout=connect_timeout, local_addr=("0.0.0.0", receiver_port)
+        ) as command_link,
+        DeviceLink(host, stream_port, timeout=connect_timeout) as stream_link,
+    ):
+        # 1) pre-start (0x2013): declare the playback context -- the RecordInfo
+        #    time range. Responds 0x2014 with a <Result> (0 = ok).
+        pre_body = build_playback_request_xml(
+            operation_code=operation_code,
+            channel=channel,
+            serial=serial,
+            permanent_code=permanent_code,
+            start_at=start_at,
+            stop_at=stop_at,
+            key=key,
+            session_key=session_key,
+            receiver_port=receiver_port,
+            receiver_stream_type=receiver_stream_type,
+            receiver_new_stream_type=receiver_new_stream_type,
+            receiver_ex_port=receiver_port,
+        )
+        await command_link.send(
+            build_encrypted_frame(
+                command=playback_command, body=pre_body, key=device_key, sequence=playback_sequence
+            )
+        )
+        pre_header = parse_frame_header(await command_link.recv_exactly(FRAME_HEADER_LENGTH))
+        pre_response = await command_link.recv_exactly(pre_header.body_length)
+        await command_link.recv_exactly(SSL_TRAILER_LENGTH)
+        pre_fields = parse_xml_fields(pre_response)
+        result = pre_fields.get("Result")
+        if result not in (None, "0"):
+            raise EzvizError(
+                f"local SDK playback pre-start rejected "
+                f"(Result={result}, command=0x{pre_header.command:04x}, "
+                f"body={pre_response[:300]!r})"
+            )
+        session = pre_fields.get("Session")
+        if not session:
+            # 2) preview (0x2011): obtain the stream Session for the playback context
+            prev_body = build_preview_request_xml(
+                operation_code=operation_code,
+                channel=channel,
+                receiver_port=receiver_port,
+                receiver_stream_type=receiver_stream_type,
+                receiver_new_stream_type=receiver_new_stream_type,
+                receiver_ex_port=receiver_port,
+            )
+            await command_link.send(
+                build_encrypted_frame(
+                    command=PREVIEW_COMMAND,
+                    body=prev_body,
+                    key=device_key,
+                    sequence=playback_sequence + 1,
+                )
+            )
+            prev_header = parse_frame_header(await command_link.recv_exactly(FRAME_HEADER_LENGTH))
+            prev_response = await command_link.recv_exactly(prev_header.body_length)
+            await command_link.recv_exactly(SSL_TRAILER_LENGTH)
+            session = parse_xml_fields(prev_response).get("Session")
+        if not session:
+            raise EzvizError(
+                f"local SDK playback: no Session after pre-start+preview "
+                f"(pre-start body={pre_response[:200]!r})"
+            )
+
+        await stream_link.send(
+            build_encrypted_frame(
+                command=STREAM_SETUP_COMMAND,
+                body=build_stream_setup_request_xml(
+                    session=session, rate=stream_rate, mode=stream_mode
+                ),
+                key=device_key,
+                sequence=stream_setup_sequence,
+            )
+        )
+        setup_header = parse_frame_header(await stream_link.recv_exactly(FRAME_HEADER_LENGTH))
+        await stream_link.recv_exactly(setup_header.body_length)
+        await stream_link.recv_exactly(SSL_TRAILER_LENGTH)
 
         while True:
             _prefix, _header, payload = await _read_frame_after_prefix(
