@@ -1,12 +1,14 @@
 """Camera object — status view + device controls (PTZ, switches, siren, alarms,
 SD records, live H.265 stream, live-to-file download).
 
-``playback()`` (EXPERIMENTAL) streams recorded SD footage via the local-SDK
-playback command reverse-engineered from the app's native libs -- the pre-start
-(``0x2013``) ``RecordInfo StartAt/StopAt`` request over the same socket as live.
-The media path is validated (recorded H.265 decodes cleanly); the pre-start
-auth/field set for exact time-seek is still being finalised against hardware.
-``records()`` lists SD-card recording segments; ``download()`` records the
+``playback()`` (EXPERIMENTAL) carries the reverse-engineered local-SDK playback
+request (the ``0x2013`` pre-start with ``RecordInfo StartAt/StopAt``) and the
+proven live media/de-framing path. IMPORTANT: on the hardware tested so far the
+local LAN socket is **live-only** -- the ``0x2013`` pre-start returns
+``<Result>131</Result>`` regardless of request shape, because these cameras
+serve recorded SD playback via the cloud **VTDU/P2P relay**, not the LAN socket.
+Exact time-seek therefore needs the VTDU transport (not yet implemented). For SD
+access today, use ``records()`` to list segments and ``download()`` to capture the
 *current live* stream to a file.
 """
 from __future__ import annotations
@@ -611,12 +613,16 @@ class Camera:
         """Yield H.265 chunks of RECORDED SD-card footage between ``start`` and
         ``stop`` (ISO ``%Y-%m-%dT%H:%M:%S`` -- use ``records()``'s ``B``/``E``).
 
-        EXPERIMENTAL: unlike ``live()``, the local playback command was
+        EXPERIMENTAL / KNOWN-LIMITED: the local playback command was
         reverse-engineered from the app's native libs (see the project's
         native-RE notes) -- the ``RecordInfo StartAt/StopAt`` request over the
-        same command socket as live. Field/opcode specifics are being validated
-        against real hardware; ``permanent_code`` and the frame opcode may need
-        tuning per firmware.
+        same command socket as live. On the hardware tested so far the LAN
+        socket is **live-only**: the ``0x2013`` pre-start answers
+        ``<Result>131</Result>`` for every request shape, because these cameras
+        serve recorded SD playback via the cloud **VTDU/P2P relay** rather than
+        the LAN socket. This method therefore currently raises ``EzvizError`` on
+        such firmware. It is retained for the RE-accurate request/media path and
+        as the seam for the future VTDU transport.
         """
         from .protocol.local_sdk import open_local_sdk_playback
 

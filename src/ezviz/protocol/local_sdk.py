@@ -260,56 +260,51 @@ def build_playback_request_xml(  # noqa: PLR0913
     permanent_code: str,
     start_at: str,
     stop_at: str,
-    receiver_port: int = DEFAULT_RECEIVER_PORT,
-    receiver_stream_type: str = "SUB",
-    receiver_new_stream_type: int = 2,
-    receiver_ex_port: int = DEFAULT_RECEIVER_PORT,
-    is_encrypt: str = "TRUE",
-    auth_ticket: str = "",
-    auth_biz_code: str = "biz=1",
-    auth_interval: int = 180,
     key: str = "",
     session_key: str = "",
+    public_key: str = "",
+    definition: str = "0",
+    end_flag: str = "0",
+    related_device: str = "",
+    uuid: str = "",
+    timestamp: str = "",
+    receiver_port: int = DEFAULT_RECEIVER_PORT,
 ) -> bytes:
     """Build the plaintext XML body for the SD-playback request.
 
-    Recovered from libezstreamclient.so ``CChipParser::CreatePlaybackStartReq``
-    (native-re.md): the same ``<Request>`` envelope as the live preview, plus
-    the playback fields -- ``<Serial>``, ``<PermanentCode>`` and, crucially,
-    ``<RecordInfo StartAt="…" StopAt="…"/>`` carrying the record window
-    (ISO ``%Y-%m-%dT%H:%M:%S`` = exactly ``records()``'s ``B``/``E``).
-    Sent over the command socket like preview; the camera then streams the
-    recorded media on the same IDMX path as ``live()``.
+    Recovered field-for-field from libezstreamclient.so ``CChipParser::
+    CreatePlaybackStartReq`` (the pugixml build sequence; see native-re.md):
+    ``OperationCode/Definition/EndFlag/Channel/Serial/RelatedDevice/Transcoding/
+    ReceiverInfo/RecordInfo/PermanentCode/Key/SessionKey/PublicKey/Uuid/
+    Timestamp``. ``RecordInfo StartAt/StopAt`` (ISO ``%Y-%m-%dT%H:%M:%S`` =
+    ``records()``'s ``B``/``E``) is the record window. NOTE: this is the
+    playback structure (NOT the live preview's ``IsEncrypt``/``ReceiverInfoEx``/
+    ``Authentication``).
     """
-    receiver_info = _xml_attrs(
-        (
-            ("Address", ""),
-            ("Port", receiver_port),
-            ("ServerType", 1),
-            ("StreamType", receiver_stream_type),
-            ("NewStreamType", receiver_new_stream_type),
-            ("TransProto", "TCP"),
-        )
-    )
-    receiver_info_ex = _xml_attrs((("SessionID", ""), ("Port", receiver_ex_port)))
-    authentication = _xml_attrs(
-        (("Ticket", auth_ticket), ("BizCode", auth_biz_code), ("Interval", auth_interval))
-    )
+    # Playback ReceiverInfo writes ONLY Address + Port (recovered from
+    # CreatePlaybackStartReq); stream selection is via <Definition>, not the
+    # live preview's StreamType/ServerType/TransProto attributes.
+    receiver_info = _xml_attrs((("Address", ""), ("Port", receiver_port)))
     record_info = _xml_attrs((("StartAt", start_at), ("StopAt", stop_at)))
+    transcoding = _xml_attrs((("Switch", "OFF"), ("Quailty", "")))
     lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
         "<Request>",
         f"\t<OperationCode>{_xml_escape(operation_code)}</OperationCode>",
+        f"\t<Definition>{_xml_escape(definition)}</Definition>",
+        f"\t<EndFlag>{_xml_escape(end_flag)}</EndFlag>",
         f"\t<Channel>{channel}</Channel>",
         f"\t<Serial>{_xml_escape(serial)}</Serial>",
+        f"\t<RelatedDevice>{_xml_escape(related_device)}</RelatedDevice>",
+        f"\t<Transcoding {transcoding} />",
         f"\t<ReceiverInfo {receiver_info} />",
-        f"\t<IsEncrypt>{_xml_escape(str(is_encrypt))}</IsEncrypt>",
-        f"\t<ReceiverInfoEx {receiver_info_ex} />",
-        f"\t<Authentication {authentication} />",
         f"\t<RecordInfo {record_info} />",
         f"\t<PermanentCode>{_xml_escape(permanent_code)}</PermanentCode>",
-        f"\t<Key>{_xml_escape(key)}</Key>",
+        f"\t<Key>{_xml_escape(key or 'null')}</Key>",
         f"\t<SessionKey>{_xml_escape(session_key)}</SessionKey>",
+        f"\t<PublicKey>{_xml_escape(public_key)}</PublicKey>",
+        f"\t<Uuid>{_xml_escape(uuid)}</Uuid>",
+        f"\t<Timestamp>{_xml_escape(timestamp)}</Timestamp>",
         "</Request>",
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -579,6 +574,9 @@ async def open_local_sdk_playback(  # noqa: PLR0913
     ):
         # 1) pre-start (0x2013): declare the playback context -- the RecordInfo
         #    time range. Responds 0x2014 with a <Result> (0 = ok).
+        import time
+        from uuid import uuid4
+
         pre_body = build_playback_request_xml(
             operation_code=operation_code,
             channel=channel,
@@ -588,10 +586,9 @@ async def open_local_sdk_playback(  # noqa: PLR0913
             stop_at=stop_at,
             key=key,
             session_key=session_key,
+            uuid=str(uuid4()),
+            timestamp=str(int(time.time() * 1000)),
             receiver_port=receiver_port,
-            receiver_stream_type=receiver_stream_type,
-            receiver_new_stream_type=receiver_new_stream_type,
-            receiver_ex_port=receiver_port,
         )
         await command_link.send(
             build_encrypted_frame(
