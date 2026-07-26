@@ -69,6 +69,22 @@ class DeviceLink:
                 f"read from {self._host}:{self._port} failed: {exc}"
             ) from exc
 
+    async def recv(self, max_bytes: int = 65536) -> bytes:
+        """Read up to ``max_bytes`` (a partial read; ``b""`` on clean EOF).
+
+        Used by the raw media loop where framing is scanned from the byte
+        stream (e.g. the IDMX playback stream) rather than length-prefixed.
+        """
+        reader = self._reader
+        if reader is None:
+            raise DeviceOffline("DeviceLink is not connected")
+        try:
+            return await asyncio.wait_for(reader.read(max_bytes), timeout=self._timeout)
+        except (TimeoutError, OSError) as exc:
+            raise DeviceOffline(
+                f"read from {self._host}:{self._port} failed: {exc}"
+            ) from exc
+
     async def close(self) -> None:
         writer = self._writer
         self._writer = None

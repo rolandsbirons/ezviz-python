@@ -1,15 +1,14 @@
 """Camera object — status view + device controls (PTZ, switches, siren, alarms,
 SD records, live H.265 stream, live-to-file download).
 
-``playback()`` (EXPERIMENTAL) carries the reverse-engineered local-SDK playback
-request (the ``0x2013`` pre-start with ``RecordInfo StartAt/StopAt``) and the
-proven live media/de-framing path. IMPORTANT: on the hardware tested so far the
-local LAN socket is **live-only** -- the ``0x2013`` pre-start returns
-``<Result>131</Result>`` regardless of request shape, because these cameras
-serve recorded SD playback via the cloud **VTDU/P2P relay**, not the LAN socket.
-Exact time-seek therefore needs the VTDU transport (not yet implemented). For SD
-access today, use ``records()`` to list segments and ``download()`` to capture the
-*current live* stream to a file.
+``playback()`` streams RECORDED SD-card footage by time over the local LAN
+socket (reverse-engineered): ``0x2013`` INIT (session-init) -> ``0x2011`` INVITE
+carrying ``RecordInfo StartAt/StopAt`` (the seek) -> ``0x3105`` PLAY, each control
+command on a fresh socket, then the raw-IDMX playback media stream. Validated
+against real hardware: a requested past window streams the seeked recording (OSD
+timestamp matches the request, not now). Frame de-framing is functional but still
+being refined for pixel-perfect multi-slice reconstruction. ``records()`` lists
+the SD segments to seek within; ``download()`` captures the *current live* stream.
 """
 from __future__ import annotations
 
@@ -613,16 +612,14 @@ class Camera:
         """Yield H.265 chunks of RECORDED SD-card footage between ``start`` and
         ``stop`` (ISO ``%Y-%m-%dT%H:%M:%S`` -- use ``records()``'s ``B``/``E``).
 
-        EXPERIMENTAL / KNOWN-LIMITED: the local playback command was
-        reverse-engineered from the app's native libs (see the project's
-        native-RE notes) -- the ``RecordInfo StartAt/StopAt`` request over the
-        same command socket as live. On the hardware tested so far the LAN
-        socket is **live-only**: the ``0x2013`` pre-start answers
-        ``<Result>131</Result>`` for every request shape, because these cameras
-        serve recorded SD playback via the cloud **VTDU/P2P relay** rather than
-        the LAN socket. This method therefore currently raises ``EzvizError`` on
-        such firmware. It is retained for the RE-accurate request/media path and
-        as the seam for the future VTDU transport.
+        Reverse-engineered local SD playback (see the project's native-RE
+        notes): ``0x2013`` INIT -> ``0x2011`` INVITE with ``RecordInfo
+        StartAt/StopAt`` (the record window / seek) -> ``0x3105`` PLAY, each
+        control command on a fresh socket, then the raw-IDMX media stream.
+        Validated against real hardware -- a requested past window yields the
+        seeked recording (its OSD timestamp matches ``start``). NOTE: multi-slice
+        frame de-framing is still being refined, so decoded frames may show
+        artifacts on some GOPs; the protocol/seek itself is solid.
         """
         from .protocol.local_sdk import open_local_sdk_playback
 

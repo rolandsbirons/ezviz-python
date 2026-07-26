@@ -213,12 +213,19 @@ def build_preview_request_xml(  # noqa: PLR0913
     auth_biz_code: str = "biz=1",
     auth_interval: int = 180,
     is_encrypt: str = "TRUE",
+    record_start: str = "",
+    record_stop: str = "",
 ) -> bytes:
-    """Build the plaintext XML body for the ``0x2011`` preview request.
+    """Build the plaintext XML body for the ``0x2011`` INVITE request.
 
     Uses the app-shaped self-closing ``ReceiverInfo``/``ReceiverInfoEx``/
     ``Authentication`` tags (the ones the reference's own credential-driven
     entry point builds), defaulting to the SUB/low-res sub-stream selection.
+
+    When ``record_start``/``record_stop`` are given (ISO ``%Y-%m-%dT%H:%M:%S``),
+    a ``<RecordInfo StartAt/StopAt>`` element is appended, turning the INVITE
+    into an SD-card PLAYBACK request for that window (the record time lives in
+    the INVITE, not the ``0x2013`` INIT).
     """
     if channel < 0:
         raise EzvizError("local SDK preview channel must be non-negative")
@@ -247,6 +254,30 @@ def build_preview_request_xml(  # noqa: PLR0913
         f"\t<IsEncrypt>{_xml_escape(str(is_encrypt))}</IsEncrypt>",
         f"\t<ReceiverInfoEx {receiver_info_ex} />",
         f"\t<Authentication {authentication} />",
+    ]
+    if record_start and record_stop:
+        record_info = _xml_attrs((("StartAt", record_start), ("StopAt", record_stop)))
+        lines.append(f"\t<RecordInfo {record_info} />")
+    lines.append("</Request>")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def build_init_request_xml(*, operation_code: str, session: int | str = 10011) -> bytes:
+    """Build the ``0x2013`` INIT (session-init) request body.
+
+    Recovered from ``ezviz_hp7/cpd7``: the ``0x2013`` command is a session INIT
+    that carries ONLY ``<OperationCode>`` (a length-validated placeholder --
+    content is not checked) + ``<Session>``; it responds ``0x2014`` with
+    ``Result 0``. It does NOT carry the playback record window -- an earlier
+    mistake here that produced a body-independent ``Result 131``. The record
+    time range goes in the subsequent ``0x2011`` INVITE
+    (``build_preview_request_xml``'s ``record_start``/``record_stop``).
+    """
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<Request>",
+        f"\t<OperationCode>{_xml_escape(operation_code)}</OperationCode>",
+        f"\t<Session>{_xml_escape(str(session))}</Session>",
         "</Request>",
     ]
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -547,7 +578,8 @@ async def open_local_sdk_playback(  # noqa: PLR0913
     receiver_stream_type: str = "SUB",
     receiver_new_stream_type: int = 2,
     media_key: str | None = None,
-    playback_command: int = 0x2013,  # PRE_START (playback); preview 0x2011 = live
+    init_command: int = 0x2013,  # session INIT (OperationCode+Session); NOT the record window
+    init_session: int = 10011,
     playback_sequence: int = 16,
     stream_setup_sequence: int = 17,
     stream_rate: str | int = 1,
@@ -566,75 +598,62 @@ async def open_local_sdk_playback(  # noqa: PLR0913
     being confirmed empirically against a camera.
     """
     assembler = StreamDecryptor(media_key)
-    async with (
-        DeviceLink(
-            host, command_port, timeout=connect_timeout, local_addr=("0.0.0.0", receiver_port)
-        ) as command_link,
-        DeviceLink(host, stream_port, timeout=connect_timeout) as stream_link,
-    ):
-        # 1) pre-start (0x2013): declare the playback context -- the RecordInfo
-        #    time range. Responds 0x2014 with a <Result> (0 = ok).
-        import time
-        from uuid import uuid4
 
-        pre_body = build_playback_request_xml(
+    # 1) INIT (0x2013): session-init -- OperationCode + Session only. Responds
+    #    0x2014 Result 0. Each control command uses a FRESH short-lived socket
+    #    (recovered from ezviz_hp7/cpd7 -- the camera drops a persistent socket
+    #    reused across INIT/INVITE). The record window does NOT go here.
+    async with DeviceLink(host, command_port, timeout=connect_timeout) as init_link:
+        init_body = build_init_request_xml(operation_code=operation_code, session=init_session)
+        await init_link.send(
+            build_encrypted_frame(
+                command=init_command, body=init_body, key=device_key, sequence=playback_sequence
+            )
+        )
+        init_header = parse_frame_header(await init_link.recv_exactly(FRAME_HEADER_LENGTH))
+        init_response = await init_link.recv_exactly(init_header.body_length)
+        await init_link.recv_exactly(SSL_TRAILER_LENGTH)
+    init_result = parse_xml_fields(init_response).get("Result")
+    if init_result not in (None, "0"):
+        raise EzvizError(
+            f"local SDK playback INIT (0x2013) rejected "
+            f"(Result={init_result}, body={init_response[:200]!r})"
+        )
+
+    # 2) INVITE (0x2011) WITH RecordInfo StartAt/StopAt -> the playback stream
+    #    Session (the record window seeks here, not in the INIT). Fresh socket.
+    async with DeviceLink(host, command_port, timeout=connect_timeout) as invite_link:
+        invite_body = build_preview_request_xml(
             operation_code=operation_code,
             channel=channel,
-            serial=serial,
-            permanent_code=permanent_code,
-            start_at=start_at,
-            stop_at=stop_at,
-            key=key,
-            session_key=session_key,
-            uuid=str(uuid4()),
-            timestamp=str(int(time.time() * 1000)),
             receiver_port=receiver_port,
+            receiver_stream_type=receiver_stream_type,
+            receiver_new_stream_type=receiver_new_stream_type,
+            receiver_ex_port=receiver_port,
+            record_start=start_at,
+            record_stop=stop_at,
         )
-        await command_link.send(
+        await invite_link.send(
             build_encrypted_frame(
-                command=playback_command, body=pre_body, key=device_key, sequence=playback_sequence
+                command=PREVIEW_COMMAND,
+                body=invite_body,
+                key=device_key,
+                sequence=playback_sequence + 1,
             )
         )
-        pre_header = parse_frame_header(await command_link.recv_exactly(FRAME_HEADER_LENGTH))
-        pre_response = await command_link.recv_exactly(pre_header.body_length)
-        await command_link.recv_exactly(SSL_TRAILER_LENGTH)
-        pre_fields = parse_xml_fields(pre_response)
-        result = pre_fields.get("Result")
-        if result not in (None, "0"):
-            raise EzvizError(
-                f"local SDK playback pre-start rejected "
-                f"(Result={result}, command=0x{pre_header.command:04x}, "
-                f"body={pre_response[:300]!r})"
-            )
-        session = pre_fields.get("Session")
-        if not session:
-            # 2) preview (0x2011): obtain the stream Session for the playback context
-            prev_body = build_preview_request_xml(
-                operation_code=operation_code,
-                channel=channel,
-                receiver_port=receiver_port,
-                receiver_stream_type=receiver_stream_type,
-                receiver_new_stream_type=receiver_new_stream_type,
-                receiver_ex_port=receiver_port,
-            )
-            await command_link.send(
-                build_encrypted_frame(
-                    command=PREVIEW_COMMAND,
-                    body=prev_body,
-                    key=device_key,
-                    sequence=playback_sequence + 1,
-                )
-            )
-            prev_header = parse_frame_header(await command_link.recv_exactly(FRAME_HEADER_LENGTH))
-            prev_response = await command_link.recv_exactly(prev_header.body_length)
-            await command_link.recv_exactly(SSL_TRAILER_LENGTH)
-            session = parse_xml_fields(prev_response).get("Session")
-        if not session:
-            raise EzvizError(
-                f"local SDK playback: no Session after pre-start+preview "
-                f"(pre-start body={pre_response[:200]!r})"
-            )
+        invite_header = parse_frame_header(await invite_link.recv_exactly(FRAME_HEADER_LENGTH))
+        invite_response = await invite_link.recv_exactly(invite_header.body_length)
+        await invite_link.recv_exactly(SSL_TRAILER_LENGTH)
+    invite_fields = parse_xml_fields(invite_response)
+    session = invite_fields.get("Session")
+    if not session:
+        raise EzvizError(
+            f"local SDK playback: no Session from INVITE "
+            f"(Result={invite_fields.get('Result')}, body={invite_response[:200]!r})"
+        )
 
+    # 3) PLAY (0x3105) + media on the persistent stream socket.
+    async with DeviceLink(host, stream_port, timeout=connect_timeout) as stream_link:
         await stream_link.send(
             build_encrypted_frame(
                 command=STREAM_SETUP_COMMAND,
@@ -649,11 +668,17 @@ async def open_local_sdk_playback(  # noqa: PLR0913
         await stream_link.recv_exactly(setup_header.body_length)
         await stream_link.recv_exactly(SSL_TRAILER_LENGTH)
 
+        # 4) media: the playback stream is raw IDMX (no RTP/``$`` interleaved
+        #    prefix like live) -- each frame is ``00 00 00 01 <session> ...
+        #    55 66 77 88 <NAL>``. Feed raw socket bytes to the IDMX de-framer,
+        #    which scans for the ``55 66 77 88`` frame sentinels.
         while True:
-            _prefix, _header, payload = await _read_frame_after_prefix(
-                stream_link, max_prefix_bytes=max_prefix_bytes
-            )
-            chunk = strip_local_fragment_header(rtp_payload(payload))
+            chunk = await stream_link.recv(65536)
+            if not chunk:
+                break
             out = assembler.update(chunk)
             if out:
                 yield out
+        tail = assembler.flush()
+        if tail:
+            yield tail
